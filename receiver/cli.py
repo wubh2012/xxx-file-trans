@@ -157,7 +157,7 @@ def main(argv=None) -> int:
             parser.error("--source video 需要 --video <录制视频文件>")
         _anchor_dirs(args)
         try:
-            return receive_frames(args, iter_video(args.video))
+            return receive_frames(args, iter_video(args.video), notify=notify)
         except ValueError as e:
             # 视频打不开（不存在 / 编码器不支持）：显式报错，不静默零帧
             print(str(e), file=sys.stderr)
