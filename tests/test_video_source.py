@@ -19,6 +19,7 @@ import pytest
 
 import fixture_encoder
 from receiver.cli import main, receive_frames
+from receiver.pipeline import FrameRejected, decode_frame
 from receiver.sources.video import iter_video
 
 
@@ -145,7 +146,12 @@ def _recording_with_noise(paths: list[Path], rng) -> list[np.ndarray]:
 
 
 def test_video_channel_restore_with_noise(tmp_path):
-    """video 通路集成：含噪点预录视频 → 稳定闸门 → CLI 还原，字节一致。"""
+    """video 通路集成：含噪点预录视频 → 稳定闸门 → CLI 还原，字节一致。
+
+    固化「闸门放行 → CRC 拒绝」路径（issue #16）：坏帧变体损坏面积超
+    闸门伪影容差被放行，CRC 整帧拒绝——断言闸门放行帧中恰有 1 帧因
+    CRC 被拒。若坏帧构造回归到低于容差（如 4×4），会被变化检测吞掉、
+    放行帧全部解码成功，此断言随即失败。"""
     src = os.urandom(1200)
     paths = _export_frames(tmp_path, src, "noisy.bin")
     rng = np.random.default_rng(42)
@@ -156,12 +162,28 @@ def test_video_channel_restore_with_noise(tmp_path):
     args = argparse.Namespace(source="video", dir=None,
                               video=video, region=None, out=out)
 
-    r = receive_frames(args, iter_video(video))
+    passed: list[tuple[str, np.ndarray]] = []  # 闸门放行帧（receive 主循环的输入）
+
+    def record_passed():
+        for name, img in iter_video(video):
+            passed.append((name, img))
+            yield name, img
+
+    r = receive_frames(args, record_passed())
 
     assert r == 0
     files = list(out.iterdir())
     assert len(files) == 1 and files[0].name == "noisy.bin"
     assert files[0].read_bytes() == src
+
+    # 恰有 1 帧（坏帧变体）被 CRC 整帧拒绝，好帧全部解码成功
+    reasons = []
+    for _, img in passed:
+        try:
+            decode_frame(img)
+        except FrameRejected as e:
+            reasons.append(e.reason)
+    assert reasons == ["crc"], f"闸门放行帧应恰有 1 帧 CRC 拒绝，实际 {reasons}"
 
 
 # ---------- 输入错误 ----------
