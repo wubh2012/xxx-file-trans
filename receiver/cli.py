@@ -53,6 +53,12 @@ def receive_frames(args, frames, notify=None) -> int:
                     if store.total_frames is not None:
                         reporter.set_total(store.total_frames,
                                            completed=store.received_count())
+                    if store.is_complete():
+                        # 收齐判据满足即提前退出进入还原（F13/验收标准 2，
+                        # issue #19）：desktop 等无限源不等流耗尽；有限源
+                        # 本就靠耗尽退出，行为不变。元数据缺失时永不
+                        # complete，照常继续收帧（验收标准 8 语义不变）。
+                        break
             except KeyboardInterrupt:
                 print("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧",
                       file=sys.stderr)

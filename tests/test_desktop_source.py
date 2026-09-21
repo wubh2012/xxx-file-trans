@@ -149,6 +149,44 @@ def test_desktop_channel_restore_with_noise(tmp_path, monkeypatch):
     assert reasons == ["crc"], f"闸门放行帧应恰有 1 帧 CRC 拒绝，实际 {reasons}"
 
 
+# ---------- 收齐自动退出（issue #19，F13/验收标准 2）----------
+
+def test_desktop_receive_stops_when_complete(tmp_path):
+    """desktop 无限源收齐即还原：主循环在收齐判据满足（数据帧齐 ∧
+    元数据已收）后提前退出进入还原，不等无限抓屏流耗尽，尾部画面
+    不被消费（images/video 有限源行为不变）。"""
+    src = b"early exit"
+    comp = gzip.compress(src)
+    paths = fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, tmp_path / "frames",
+        filename="early.bin", plain_size=len(src),
+        cols=48, rows=48, bit=4, pad=3,
+    )
+    consumed = []
+
+    def capture():
+        for p in paths:  # 每个传输帧捕获两次 → 稳定放行，全部收齐
+            img = _read_gray(p)
+            for _ in range(2):
+                consumed.append("frame")
+                yield img
+        rng = np.random.default_rng(7)
+        for _ in range(20):  # 收齐后的尾部画面：提前退出则不被消费
+            consumed.append("tail")
+            yield rng.integers(0, 256, size=_read_gray(paths[0]).shape,
+                               dtype=np.uint8)
+
+    out = tmp_path / "output"
+    args = argparse.Namespace(source="desktop", dir=None,
+                              region="0,0,100,100", out=out)
+
+    r = receive_frames(args, iter_desktop(capture=capture()))
+
+    assert r == 0
+    assert (out / "early.bin").read_bytes() == src
+    assert consumed.count("tail") == 0, "收齐后应停止消费抓屏流，尾部画面不被读入"
+
+
 # ---------- CLI 分派 ----------
 
 def test_cli_desktop_bad_region_exits_2():
