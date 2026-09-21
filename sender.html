@@ -1,0 +1,343 @@
+<!doctype html>
+<!-- 发送端最小封帧播放（issue #3）。
+     file:// 直开、零网络请求、零依赖。协议唯一基准：docs/protocol.md。
+     几何约定（本页为实现基准，接收端几何自举按此推导）：
+       - 静默区为黑色，宽度 = PAD × BIT 像素（PAD 单位 = BIT 像素）；
+       - 角标 = 白色实心方块，边长严格 = 3×BIT 像素，内角与数据网格四角
+         外角重合、伸入静默区（对角线方向），因此要求 PAD ≥ 3；
+       - 画布总尺寸 = (COLS + 2×PAD) × BIT 乘 (ROWS + 2×PAD) × BIT，
+         按屏幕自动反推 COLS/ROWS，整数倍缩放（1 方块 = BIT 像素，无插值）。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件摆渡发送端</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #000;              /* 与静默区同色，画布外沿干净 */
+    color: #ddd;
+    font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #ui { max-width: 640px; padding: 24px; }
+  h1 { font-size: 18px; color: #fff; margin: 0 0 12px; }
+  fieldset { border: 1px solid #333; border-radius: 6px; margin: 0 0 12px; }
+  legend { color: #aaa; padding: 0 6px; }
+  label { margin-right: 14px; white-space: nowrap; }
+  input[type="number"] { width: 64px; background: #111; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; }
+  #drop {
+    border: 2px dashed #555; border-radius: 8px; padding: 18px;
+    text-align: center; color: #aaa; margin-bottom: 12px; cursor: pointer;
+  }
+  #drop.over { border-color: #8cf; color: #8cf; }
+  #info { margin: 0 0 12px; padding: 10px 12px; background: #111; border-radius: 6px; }
+  #info td { padding: 1px 10px 1px 0; }
+  #info td:first-child { color: #999; }
+  #status { color: #8cf; min-height: 1.5em; }
+  #stopHint { color: #777; font-size: 12px; }
+  canvas { display: block; image-rendering: pixelated; }  /* 非整数 DPR 下仍按最近邻放大，方块边缘不插值 */
+  /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景 */
+  body.playing #ui { display: none; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <h1>文件摆渡发送端</h1>
+  <fieldset>
+    <legend>发送参数</legend>
+    <label>BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
+    <label>PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
+    <label>FPS <input id="fps" type="number" min="1" max="30" value="5"></label>
+  </fieldset>
+  <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 全屏循环播放）</div>
+  <input id="file" type="file" hidden>
+  <table id="info" hidden><tbody></tbody></table>
+  <p id="status"></p>
+  <p id="stopHint">播放中按 Esc 或点击画面即停止并返回本页。</p>
+</div>
+<canvas id="stage" hidden></canvas>
+<script>
+'use strict';
+
+/* ---------- CRC-32/ISO-HDLC（docs/protocol.md §3，与 zlib.crc32 同参） ---------- */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function crcUpdate(bytes, crc) {
+  for (let i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return crc;
+}
+function crcFinal(crc) { return (crc ^ 0xFFFFFFFF) >>> 0; }
+
+/* 启动自检（协议冻结要求：两端启动时必须自检通过） */
+function selfTest() {
+  return crcFinal(crcUpdate(new TextEncoder().encode('123456789'), 0xFFFFFFFF)) === 0xCBF43926;
+}
+
+/* ---------- 全局发送状态 ---------- */
+const state = {
+  fileId: 0, fileName: '', plainSize: 0,
+  compBuf: null, compSize: 0,
+  geo: null,          // { BIT, PAD, COLS, ROWS, FPS, chunkSize }
+  totalFrames: 0,
+  playing: false,
+};
+
+/* ---------- 几何推导：按屏幕自动反推 COLS/ROWS ---------- */
+function deriveGeometry() {
+  // 取窗口与屏幕的较小者：全屏成功时两者相等；全屏被拒时按当前窗口反推，
+  // 保证画布完整可见、四角角标不被裁掉（接收端几何自举依赖角标）
+  const W = Math.min(screen.width, innerWidth), H = Math.min(screen.height, innerHeight);
+  const pad = clampInt(el('pad').value, 3, 15);   // PAD < 3 放不下 3×BIT 角标
+  let bit = clampInt(el('bit').value, 1, 15);
+  // BIT 过小会使 COLS/ROWS 超出帧头 1 字节上限，自动抬升（UI 回显实际生效值）
+  bit = Math.max(bit, Math.ceil(W / (255 + 2 * pad)), Math.ceil(H / (255 + 2 * pad)));
+  if (bit > 15) throw new Error('屏幕分辨率过高，BIT 超出 15 上限，无法编码');
+  let cols = Math.floor(W / bit) - 2 * pad;
+  let rows = Math.floor(H / bit) - 2 * pad;
+  while (rows > 0 && (cols * rows) % 8 !== 0) rows--;   // (COLS×ROWS) mod 8 == 0 冻结约束
+  if (cols < 1 || rows < 1) throw new Error('静默区参数过大：数据网格放不下');
+  if (cols * rows - 208 < 8) throw new Error('数据区容量不足（BIT 过大或屏幕过小）');
+  const chunkSize = (cols * rows - 208) / 8;            // 208 bit 帧头之外的整字节容量
+  const fps = clampInt(el('fps').value, 1, 30);
+  return { BIT: bit, PAD: pad, COLS: cols, ROWS: rows, FPS: fps, chunkSize };
+}
+
+/* ---------- 封帧（docs/protocol.md §1/§2） ---------- */
+function frameDataLen(frameNo) {
+  return Math.min(state.geo.chunkSize, state.compSize - frameNo * state.geo.chunkSize);
+}
+function frameSlice(frameNo) {
+  return state.compBuf.subarray(frameNo * state.geo.chunkSize, frameNo * state.geo.chunkSize + frameDataLen(frameNo));
+}
+function buildHeader(frameNo) {
+  const h = new Uint8Array(26);
+  const dv = new DataView(h.buffer);
+  h[0] = 0xF0; h[1] = 0xA5;                       // SYNC（不参与 CRC）
+  h[2] = 0x01;                                    // VER
+  dv.setUint32(3, state.fileId);                  // FILE_ID
+  h[7] = (frameNo >>> 16) & 0xFF;                 // FRAME_NO（3B 大端）
+  h[8] = (frameNo >>> 8) & 0xFF;
+  h[9] = frameNo & 0xFF;
+  h[10] = (state.totalFrames >>> 16) & 0xFF;      // TOTAL_FRAMES（3B 大端）
+  h[11] = (state.totalFrames >>> 8) & 0xFF;
+  h[12] = state.totalFrames & 0xFF;
+  dv.setUint16(13, frameDataLen(frameNo));        // DATA_LEN
+  dv.setUint16(15, state.geo.chunkSize);          // CHUNK_SIZE
+  h[17] = state.geo.COLS;
+  h[18] = state.geo.ROWS;
+  h[19] = (state.geo.BIT << 4) | state.geo.PAD;   // GEO：高 4 bit BIT，低 4 bit PAD
+  h[20] = 0x80; h[21] = 0x00;                     // FLAGS：bit15 = gzip
+  // CRC 覆盖偏移 2–21 + 数据区有效字节（冻结关键）
+  dv.setUint32(22, crcFinal(crcUpdate(frameSlice(frameNo), crcUpdate(h.subarray(2, 22), 0xFFFFFFFF))));
+  return h;
+}
+
+/* 帧 → COLS×ROWS 位网格：行优先、字节内 MSB first，黑块 = 1 */
+function encodeFrameGrid(frameNo) {
+  const header = buildHeader(frameNo);
+  const gridBytes = new Uint8Array(state.geo.COLS * state.geo.ROWS / 8);
+  let bitPos = 0;
+  const writeBits = (bytes) => {
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      if (b === 0) { bitPos += 8; continue; }
+      for (let k = 7; k >= 0; k--) {
+        if ((b >> k) & 1) gridBytes[bitPos >> 3] |= 0x80 >> (bitPos & 7);
+        bitPos++;
+      }
+    }
+  };
+  writeBits(header);
+  writeBits(frameSlice(frameNo));
+  return { header, gridBytes, dataLen: frameDataLen(frameNo) };
+}
+
+/* ---------- 渲染：离屏 1px/块 → 整数倍 BIT 放大 + 黑静默区 + 白角标 ---------- */
+const stage = el('stage');
+const ctx = stage.getContext('2d');
+const gridCanvas = document.createElement('canvas');
+const gridCtx = gridCanvas.getContext('2d');
+let frameImage = null;
+
+function setupCanvas() {
+  const { BIT, PAD, COLS, ROWS } = state.geo;
+  stage.width = (COLS + 2 * PAD) * BIT;
+  stage.height = (ROWS + 2 * PAD) * BIT;
+  gridCanvas.width = COLS; gridCanvas.height = ROWS;
+  frameImage = gridCtx.createImageData(COLS, ROWS);
+}
+
+function renderFrame(frameNo) {
+  const { BIT, PAD, COLS, ROWS } = state.geo;
+  const { gridBytes } = encodeFrameGrid(frameNo);
+  const px = frameImage.data;                       // 先全白（0），再点黑（1）
+  for (let i = 0; i < px.length; i++) px[i] = 255;
+  for (let byte = 0; byte < gridBytes.length; byte++) {
+    const b = gridBytes[byte];
+    if (b === 0) continue;
+    for (let k = 7; k >= 0; k--) {
+      if ((b >> k) & 1) {
+        const cell = byte * 8 + (7 - k);
+        const o = ((cell / COLS | 0) * COLS + (cell % COLS)) * 4;
+        px[o] = px[o + 1] = px[o + 2] = 0; px[o + 3] = 255;
+      }
+    }
+  }
+  gridCtx.putImageData(frameImage, 0, 0);
+  ctx.imageSmoothingEnabled = false;                // 整数倍缩放，无插值
+  ctx.fillStyle = '#000';                           // 静默区
+  ctx.fillRect(0, 0, stage.width, stage.height);
+  ctx.drawImage(gridCanvas, PAD * BIT, PAD * BIT, COLS * BIT, ROWS * BIT);
+  const m = 3 * BIT, ox = PAD * BIT, oy = PAD * BIT, gw = COLS * BIT, gh = ROWS * BIT;
+  ctx.fillStyle = '#fff';                           // 角标：白色实心方块，边长 3×BIT，内角贴网格外角
+  ctx.fillRect(ox - m, oy - m, m, m);
+  ctx.fillRect(ox + gw, oy - m, m, m);
+  ctx.fillRect(ox - m, oy + gh, m, m);
+  ctx.fillRect(ox + gw, oy + gh, m, m);
+}
+
+/* ---------- 播放循环：无限循环重播（元数据帧插入节奏属后续票据） ---------- */
+let rafId = 0, lastTs = 0, frameIdx = 0;
+function loop(ts) {
+  if (!state.playing) return;
+  if (ts - lastTs >= 1000 / state.geo.FPS) {
+    lastTs = ts;
+    renderFrame(frameIdx);
+    frameIdx = (frameIdx + 1) % state.totalFrames;
+  }
+  rafId = requestAnimationFrame(loop);
+}
+
+async function startPlayback() {
+  // 先争取全屏再反推几何：全屏成功时窗口 = 屏幕；被拒时按当前窗口反推，
+  // 画布必然完整可见、四角角标不被裁掉（几何自举依赖角标）
+  try { await document.documentElement.requestFullscreen(); } catch (e) {}  // 非手势场景失败则窗口播放
+  try {
+    state.geo = deriveGeometry();
+  } catch (e) {
+    setStatus('几何参数错误：' + e.message, true);
+    return;
+  }
+  state.totalFrames = Math.ceil(state.compSize / state.geo.chunkSize);
+  if (state.totalFrames > 0xFFFFFF) { setStatus('文件过大：帧号超出 3 字节上限', true); return; }
+  updateInfo();
+  setupCanvas();
+  stage.hidden = false;
+  document.body.classList.add('playing');
+  state.playing = true;
+  frameIdx = 0; lastTs = -1e9;
+  rafId = requestAnimationFrame(loop);
+}
+
+function stopPlayback() {
+  state.playing = false;
+  cancelAnimationFrame(rafId);
+  stage.hidden = true;
+  document.body.classList.remove('playing');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+/* ---------- 文件处理：fileId（纯内容 CRC32）→ gzip → 分片封帧 ---------- */
+/* 逐块读流，返回总字节数；onChunk 可选回调处理每块 */
+async function readStream(stream, onChunk) {
+  const reader = stream.getReader();
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (onChunk) onChunk(value);
+  }
+  return size;
+}
+
+async function handleFile(file) {
+  stopPlayback();
+  setStatus('计算 fileId（纯内容 CRC32）…');
+  let crc = 0xFFFFFFFF;
+  const plain = await readStream(file.stream(), (v) => { crc = crcUpdate(v, crc); });
+  state.fileId = crcFinal(crc);
+  state.fileName = file.name; state.plainSize = plain;
+
+  if (typeof CompressionStream === 'undefined') {
+    setStatus('本浏览器不支持 CompressionStream，无法 gzip 压缩', true);
+    return;
+  }
+  setStatus('gzip 压缩中…');
+  const chunks = [];
+  const size = await readStream(file.stream().pipeThrough(new CompressionStream('gzip')), (v) => chunks.push(v));
+  state.compBuf = new Uint8Array(size);
+  let off = 0;
+  for (const c of chunks) { state.compBuf.set(c, off); off += c.length; }
+  state.compSize = size;
+
+  setStatus('已就绪，开始全屏循环播放');
+  startPlayback();
+}
+
+/* ---------- UI ---------- */
+function el(id) { return document.getElementById(id); }
+function clampInt(v, lo, hi) {
+  const n = parseInt(v, 10);
+  return isNaN(n) ? lo : Math.min(hi, Math.max(lo, n));
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function setStatus(msg, isErr) {
+  const s = el('status');
+  s.textContent = msg;
+  s.style.color = isErr ? '#f66' : '#8cf';
+  s.style.fontWeight = isErr ? 'bold' : 'normal';
+}
+function updateInfo() {
+  const g = state.geo;
+  const rows = [
+    ['fileId（内容 CRC32）', '0x' + state.fileId.toString(16).toUpperCase().padStart(8, '0')],
+    ['文件名', escapeHtml(state.fileName)],
+    ['原始 / 压缩大小', `${state.plainSize} / ${state.compSize} 字节`],
+    ['BIT / PAD / FPS', `${g.BIT} px / ${g.PAD}×BIT / ${g.FPS}`],
+    ['COLS × ROWS', `${g.COLS} × ${g.ROWS}`],
+    ['chunkSize', `${g.chunkSize} 字节/帧`],
+    ['总帧数', `${state.totalFrames}（每轮约 ${(state.totalFrames / g.FPS).toFixed(1)} 秒）`],
+  ];
+  const tb = el('info').tBodies[0];
+  tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+  el('info').hidden = false;
+}
+
+const drop = el('drop'), fileInput = el('file');
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+stage.addEventListener('click', stopPlayback);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopPlayback(); });
+
+if (!selfTest()) {
+  setStatus('CRC 自检未通过（期望 CRC32("123456789") == 0xCBF43926），已禁用发送', true);
+  fileInput.disabled = true;
+} else {
+  setStatus('自检通过（CRC-32/ISO-HDLC），选择文件开始发送');
+}
+
+/* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
+window.__sender = { state, selfTest, crcUpdate, crcFinal, deriveGeometry, encodeFrameGrid, renderFrame };
+</script>
+</body>
+</html>
