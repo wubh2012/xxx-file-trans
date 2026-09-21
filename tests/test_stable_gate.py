@@ -102,3 +102,25 @@ def test_size_change_is_new_frame():
     g.feed(img(1, 32), now=0.0)
     g.feed(img(1, 32), now=0.1)
     assert g.feed(img(1, 64), now=0.2) is None  # 形状不同 → 新候选，不放行也不跳过
+
+
+def test_flush_emits_pending_candidate():
+    """有限流结束（video 源 #10）：未稳定候选（末帧首现一次、录制恰好在
+    此截尾）flush 放行，不静默丢失。"""
+    g = StableFrameGate()
+    a, b = img(1), img(2)
+    assert g.feed(a, now=0.0) is None
+    assert g.feed(a, now=0.1) is not None  # A 稳定放行
+    assert g.feed(b, now=0.2) is None  # B 首现入候选，流在此结束
+    out = g.flush()
+    assert out is not None and np.array_equal(out, b)
+
+
+def test_flush_without_pending_candidate():
+    """无未稳定候选（从未喂帧 / 候选已放行清空）→ flush 返回 None。"""
+    g = StableFrameGate()
+    assert g.flush() is None
+    a = img(1)
+    assert g.feed(a, now=0.0) is None
+    assert g.feed(a, now=0.1) is not None  # A 稳定放行，候选已清空
+    assert g.flush() is None

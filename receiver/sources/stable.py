@@ -10,6 +10,9 @@
 - **超时强制解码**：距上次放行超过 timeout_s 仍有未稳定候选 → 放行
   最新帧。画面永不稳定（持续动画/持续伪影）时不永久卡死，坏帧由
   CRC 兜底整帧丢弃。
+- **流末 flush**：有限流（video 源 #10）结束时放行未稳定的滞留候选。
+  最后一个传输帧可能只被解码一次（录制恰好截尾），desktop 无限采集
+  永不遇到，video 流耗尽后 flush 收尾。
 
 帧一致判定带容差：单像素差 ≤ tol 视为相等；超 tol 像素占比 ≤ frac_max
 视为同帧。整幅渐变（压缩伪影）与小面积噪声（光标闪烁）由此免疫，
@@ -76,6 +79,15 @@ class StableFrameGate:
         self._candidate = img
         self._candidate_hits = 1
         return None
+
+    def flush(self) -> np.ndarray | None:
+        """有限流结束：放行未稳定的滞留候选，返回 None 表示无候选。"""
+        out = self._candidate
+        self._candidate = None
+        self._candidate_hits = 0
+        if out is not None:
+            self._last_emitted = out
+        return out
 
     def _emit(self, img: np.ndarray, now: float) -> np.ndarray:
         self._last_emitted = img

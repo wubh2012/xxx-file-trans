@@ -16,6 +16,7 @@ from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
 from receiver.sources import iter_source
 from receiver.sources.desktop import iter_desktop, parse_region
+from receiver.sources.video import iter_video
 from receiver.store import FrameStore, IncompleteError
 
 
@@ -130,5 +131,16 @@ def main(argv=None) -> int:
         _anchor_dirs(args)
         return receive_frames(args, iter_desktop(region=region))
 
-    print(f"源 {args.source} 尚未实现（video: #10 / camera: #13）", file=sys.stderr)
+    if args.source == "video":
+        if not args.video:
+            parser.error("--source video 需要 --video <录制视频文件>")
+        _anchor_dirs(args)
+        try:
+            return receive_frames(args, iter_video(args.video))
+        except ValueError as e:
+            # 视频打不开（不存在 / 编码器不支持）：显式报错，不静默零帧
+            print(str(e), file=sys.stderr)
+            return 2
+
+    print(f"源 {args.source} 尚未实现（camera: #13）", file=sys.stderr)
     return 2
