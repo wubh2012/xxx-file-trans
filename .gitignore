@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+output/
+progress/
+debug/
+frames_png/
+frames.json
+.pytest_cache/

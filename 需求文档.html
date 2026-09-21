@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>跨隔离网络单向文件传输需求文档</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --ink: #1d2125;
+  --muted: #5c6670;
+  --accent: #0e5c4f;
+  --accent-soft: #e2efeb;
+  --line: #e3e6e2;
+  --code-bg: #f0f2ee;
+  --block-a: #1d2125;
+  --block-b: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131614;
+    --surface: #1b201d;
+    --ink: #e8ece8;
+    --muted: #97a29b;
+    --accent: #4fc3a1;
+    --accent-soft: #1e2b27;
+    --line: #2a322d;
+    --code-bg: #202722;
+    --block-a: #e8ece8;
+    --block-b: #131614;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131614;
+  --surface: #1b201d;
+  --ink: #e8ece8;
+  --muted: #97a29b;
+  --accent: #4fc3a1;
+  --accent-soft: #1e2b27;
+  --line: #2a322d;
+  --code-bg: #202722;
+  --block-a: #e8ece8;
+  --block-b: #131614;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  padding: 0 20px;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 48px;
+  padding-block: 48px 96px;
+}
+nav.toc {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+  font-size: 13px;
+  line-height: 2.1;
+}
+nav.toc .toc-label {
+  font-size: 11px;
+  letter-spacing: .12em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+nav.toc a {
+  color: var(--muted);
+  display: block;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+nav.toc a:hover { color: var(--accent); text-decoration: none; border-left-color: var(--accent); }
+main { min-width: 0; }
+
+/* ---------- header ---------- */
+header.doc { margin-bottom: 56px; }
+.bitstrip { display: flex; gap: 4px; margin-bottom: 20px; }
+.bitstrip i {
+  width: 14px; height: 14px;
+  background: var(--block-a);
+}
+.bitstrip i.w { background: var(--block-b); border: 1px solid var(--line); }
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: .18em;
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+h1 {
+  font-family: "Noto Serif SC", "SimSun", serif;
+  font-size: clamp(26px, 4.5vw, 38px);
+  font-weight: 700;
+  line-height: 1.35;
+  text-wrap: balance;
+  margin-bottom: 14px;
+}
+.lede { color: var(--muted); max-width: 46em; font-size: 16px; }
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-top: 22px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.meta b { color: var(--ink); font-weight: 500; }
+
+/* ---------- sections ---------- */
+section { margin-bottom: 56px; }
+h2 {
+  font-family: "Noto Serif SC", "SimSun", serif;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-wrap: balance;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 22px;
+  scroll-margin-top: 24px;
+}
+h2 .no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 10px; }
+h3 {
+  font-size: 15.5px;
+  font-weight: 700;
+  margin: 28px 0 10px;
+}
+p { max-width: 46em; margin-bottom: 12px; }
+p code, li code, td code {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: .88em;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+ul.plain { padding-left: 1.3em; margin-bottom: 12px; }
+ul.plain li { margin-bottom: 6px; max-width: 46em; }
+
+/* ---------- tables ---------- */
+.scroll { overflow-x: auto; margin-bottom: 16px; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 560px;
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+th, td {
+  text-align: left;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  font-size: 12px;
+  letter-spacing: .08em;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--code-bg);
+  white-space: nowrap;
+}
+tr:last-child td { border-bottom: none; }
+td.num {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--accent);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- flow ---------- */
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  margin: 18px 0 22px;
+}
+.flow .step {
+  flex: 1 1 150px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  min-width: 0;
+}
+.flow .step b { display: block; font-size: 13.5px; margin-bottom: 4px; }
+.flow .arrow {
+  align-self: center;
+  color: var(--accent);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+.flow .channel {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-style: dashed;
+}
+.flow .channel b { color: var(--accent); }
+
+/* ---------- callouts & cards ---------- */
+.callout {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 12px 16px;
+  margin: 16px 0;
+  font-size: 14px;
+  max-width: 46em;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+.grid2 .card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 16px 18px;
+  min-width: 0;
+}
+.grid2 .card b { display: block; margin-bottom: 6px; font-size: 14.5px; }
+.grid2 .card p { font-size: 13.5px; color: var(--muted); margin: 0; }
+
+.status-list { list-style: none; padding: 0; }
+.status-list li {
+  padding: 10px 0 10px 26px;
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  max-width: 46em;
+}
+.status-list li:last-child { border-bottom: none; }
+.status-list li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 19px;
+  width: 10px; height: 10px;
+  background: var(--accent);
+}
+.status-list li b { font-weight: 700; }
+
+footer {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 46em;
+}
+
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; gap: 24px; padding-block: 32px 72px; }
+  nav.toc { position: static; border: 1px solid var(--line); background: var(--surface); padding: 12px 14px; }
+  nav.toc a { border-left: none; padding-left: 0; display: inline-block; margin-right: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<nav class="toc">
+  <div class="toc-label">目录</div>
+  <a href="#s1">一 · 核心问题</a>
+  <a href="#s2">二 · 工作原理</a>
+  <a href="#s3">三 · 关键约束</a>
+  <a href="#s4">四 · 功能需求</a>
+  <a href="#s5">五 · 非功能需求</a>
+  <a href="#s6">六 · 验收标准</a>
+</nav>
+
+<main>
+<header class="doc">
+  <div class="bitstrip" aria-hidden="true">
+    <i class="w"></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i class="w"></i><i></i><i class="w"></i><i></i><i class="w"></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i class="w"></i><i></i>
+  </div>
+  <div class="eyebrow">NODE-FILE-TRANS · 需求文档</div>
+  <h1>跨网络隔离的单向文件传输系统</h1>
+  <p class="lede">在没有网络通道、不允许使用 U 盘等物理介质的两个隔离环境之间，以"屏幕显示 → 摄像头 / 屏幕采集拍摄 → 程序识别还原"为唯一信道，完成文件摆渡。</p>
+  <div class="meta">
+    <span>版本 <b>第三轮修订（协议冻结）</b></span>
+    <span>整理日期 <b>2026-09-21</b></span>
+    <span>发送端 <b>纯浏览器 Canvas</b></span>
+    <span>接收端 <b>Python + OpenCV</b></span>
+  </div>
+</header>
+
+<section id="s1">
+  <h2><span class="no">一</span>核心问题</h2>
+  <div class="grid2">
+    <div class="card">
+      <b>内网（发送端）</b>
+      <p>无法联网，与外网没有任何通信通道；需要把文件送出去。</p>
+    </div>
+    <div class="card">
+      <b>外网（接收端）</b>
+      <p>需要拿到内网的文件，但与内网之间无网络、无摆渡介质。</p>
+    </div>
+  </div>
+  <p>唯一可行的通道是把<strong>屏幕本身当作单向光信号发射器</strong>：内网屏幕显示黑白方块帧，外网摄像头连续拍摄（或经远程桌面屏幕采集），接收端程序识别并还原文件。</p>
+  <h3>否决的替代方案</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>方案</th><th>否决原因</th></tr>
+    <tr><td>二维码</td><td>单张容量小、帧率低、容量固定，大文件需成百上千张，不适合连续流式传输</td></tr>
+    <tr><td>0/1 文字 + OCR</td><td>误码率高、速度慢；黑白方块直接表示 bit，识别稳定，速度快 5～10 倍</td></tr>
+  </table>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">二</span>工作原理</h2>
+  <div class="flow">
+    <div class="step"><b>发送端（内网浏览器）</b>文件 → gzip 压缩 → 分片 → 封帧（头部 + CRC32）→ Canvas 渲染黑白方块 → 全屏循环播放</div>
+    <div class="arrow">→</div>
+    <div class="step channel"><b>单向信道</b>屏幕光信号 / 数字图像采集，摄像头或 mss 抓屏，无任何反向通道</div>
+    <div class="arrow">→</div>
+    <div class="step"><b>接收端（外网 Python）</b>取帧 → 角标定位 → 透视校正 → 采样二值化 → CRC 校验 → 落盘 → 收齐还原 → 通知</div>
+  </div>
+  <h3>协议要点（两端逐 bit 一致）</h3>
+  <ul class="plain">
+    <li><strong>帧头 208 bit</strong>：同步字 <code>0xF0A5</code>、版本、文件 ID、帧号（<code>0xFFFFFF</code> 为元数据帧哨兵）、总帧数、数据长度、分片大小、几何参数（COLS / ROWS / BIT / PAD）、CRC32</li>
+    <li><strong>CRC 冻结为 CRC-32/ISO-HDLC</strong>（<code>zlib.crc32</code> 同参），双端自检向量 <code>CRC32(b"123456789") == 0xCBF43926</code>；覆盖头部（除同步字）+ 有效数据字节，补位不计入</li>
+    <li><strong>元数据帧</strong>：携带文件名（UTF-8）、压缩后大小、原始大小、压缩方式——接收端确定落盘文件名与 <code>data.bin</code> 截断长度的唯一来源</li>
+    <li><strong>取帧源 4 种</strong>：<code>camera</code>（锁曝光/对焦/白平衡）、<code>video</code>、<code>images</code>（离线闭环自测主通道）、<code>desktop</code>（mss 抓屏，支持 <code>--region</code>，含变化检测 + 稳定两帧 + 超时强制解码）</li>
+  </ul>
+</section>
+
+<section id="s3">
+  <h2><span class="no">三</span>关键约束</h2>
+  <p>全部方案设计都由这三条约束推导而来：</p>
+  <div class="callout">
+    <strong>1. 严格单向，无任何反向通道</strong> —— 发送端不知道接收端收到没有。断点续传只能靠"发送端无限循环重播 + 接收端本地持久化去重"。
+  </div>
+  <div class="callout">
+    <strong>2. 信道不可靠</strong> —— 摄像头通道有摩尔纹、曝光漂移、帧不同步；desktop 通道有 RDP H.264 压缩伪影、渐进刷新过渡帧。必须靠 CRC32 兜底，坏帧整帧丢弃。
+  </div>
+  <div class="callout">
+    <strong>3. 两端参数必须逐 bit 一致</strong> —— <code>COLS / ROWS / BIT / PAD / chunkSize</code> 任何一项错配都会让采样坐标整体偏移、整场解不出。协议把几何参数写进帧头供交叉校验，发送端 UI 回显参数并提供"一键复制接收端命令"。
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">四</span>功能需求</h2>
+  <h3>传输协议</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>编号</th><th>需求</th><th>说明</th></tr>
+    <tr><td class="num">F1</td><td>文件分片</td><td>支持任意文件，gzip 压缩后分片，单文件上限 256 MB</td></tr>
+    <tr><td class="num">F2</td><td>帧封装</td><td>208 bit 帧头 + 数据区，行优先填充、字节内 MSB first，两端写死</td></tr>
+    <tr><td class="num">F3</td><td>帧校验</td><td>CRC-32/ISO-HDLC，错误帧整帧丢弃，不污染文件</td></tr>
+    <tr><td class="num">F4</td><td>元数据帧</td><td>帧号 <code>0xFFFFFF</code>，携带文件名 / plainSize / compressedSize / 压缩方式；每轮首帧 + 每 100 帧插入一次</td></tr>
+    <tr><td class="num">F5</td><td>文件 ID 唯一</td><td>纯内容派生（原始文件字节 CRC32），同文件重开页面 ID 不变，保证续传命中</td></tr>
+  </table>
+  </div>
+  <h3>发送端</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>编号</th><th>需求</th><th>说明</th></tr>
+    <tr><td class="num">F6</td><td>屏幕播放</td><td>全屏 Canvas 循环播放，整数倍缩放 + <code>image-rendering: pixelated</code>，画布外沿干净（背景同静默区色、隐藏黑色 UI）</td></tr>
+    <tr><td class="num">F7</td><td>参数可调</td><td>BIT / FPS / chunkSize / COLS / ROWS 可配置，按屏自动反推并回显</td></tr>
+    <tr><td class="num">F8</td><td>参数对齐</td><td>"一键复制接收端命令"按钮；接收端错配时打印期望值 vs 实际值</td></tr>
+    <tr><td class="num">F9</td><td>离线自测素材</td><td>导出 <code>frames_png/&lt;seq6&gt;.png</code> + <code>frames.json</code>，支撑逐帧字节一致比对</td></tr>
+  </table>
+  </div>
+  <h3>接收端</h3>
+  <div class="scroll">
+  <table>
+    <tr><th>编号</th><th>需求</th><th>说明</th></tr>
+    <tr><td class="num">F10</td><td>四种取帧源</td><td>camera / video / images / desktop，统一迭代器接口；desktop 含变化检测、稳定两帧、超时强制解码、DPI 感知</td></tr>
+    <tr><td class="num">F11</td><td>识别流水线</td><td>局部自适应阈值 → 角标检测（四条几何一致性约束）→ 透视校正 → 规范画布 Otsu → 5×5 中位数采样</td></tr>
+    <tr><td class="num">F12</td><td>断点续传</td><td><code>received.bin</code> 位图 + <code>data.bin</code> 定长写入；重启只补缺失帧；同 fileId 参数变更拒绝并告警</td></tr>
+    <tr><td class="num">F13</td><td>收齐还原</td><td>收齐判据 = 数据帧齐 ∧ 元数据帧已收；拼接 → gunzip → 落盘 <code>output/</code>，gzip 尾部 CRC+ISIZE 作端到端完整性证明</td></tr>
+    <tr><td class="num">F14</td><td>文件名安全</td><td>七步净化（路径穿越 / 保留名 / 非法字符 / 200 字节截断）+ <code>resolve()</code> 二次校验</td></tr>
+    <tr><td class="num">F15</td><td>进度显示</td><td>rich 多文件实时进度：帧数 / 百分比 / KB/s / 识别率 / 丢帧；CRC 连续失败告警限流</td></tr>
+    <tr><td class="num">F16</td><td>完成通知</td><td>Windows 桌面通知 + 声音，缺失依赖时降级为终端高亮</td></tr>
+    <tr><td class="num">F17</td><td>校准自测</td><td><code>calibrate</code> 子命令：识别率 / CRC 通过率统计 → 推荐参数回灌 <code>calibration.json</code></td></tr>
+  </table>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">五</span>非功能需求</h2>
+  <div class="scroll">
+  <table>
+    <tr><th>编号</th><th>需求</th><th>说明</th></tr>
+    <tr><td class="num">N1</td><td>容错</td><td>坏帧丢弃不污染文件；元数据缺失时数据帧照常落盘但不还原</td></tr>
+    <tr><td class="num">N2</td><td>持久化</td><td><code>meta.json</code> 原子写（tmp + <code>os.replace</code>）；惰性加载未完成任务；还原成功后清理 payload 防磁盘膨胀</td></tr>
+    <tr><td class="num">N3</td><td>低依赖</td><td>发送端纯浏览器单文件、可 <code>file://</code> 直开、零网络请求；不引入 Electron</td></tr>
+    <tr><td class="num">N4</td><td>路径锚定</td><td><code>progress/</code>、<code>output/</code>、<code>debug/</code> 锚定脚本目录，不依赖 cwd；高 DPI 感知</td></tr>
+    <tr><td class="num">N5</td><td>性能目标</td><td>desktop 通道 1 MB 文件 1 分钟内收齐还原；calibrate 识别率 ≥ 99%</td></tr>
+    <tr><td class="num">N6</td><td>使用边界</td><td>跨隔离网络单向摆渡工具，须符合组织安全策略；当前不提供加密与访问控制</td></tr>
+  </table>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">六</span>验收标准</h2>
+  <ul class="status-list">
+    <li><b>离线闭环</b>：发送端导出 PNG + frames.json，接收端 <code>--source images</code> 解码 100% 通过 CRC，逐帧字节一致，gunzip 后 sha256 与原文件一致</li>
+    <li><b>桌面通道</b>：本机全屏播放 + <code>--source desktop</code> 整屏捕获，1 MB 文件 1 分钟内收齐还原</li>
+    <li><b>校准</b>：calibrate 输出识别率 ≥ 99%，据此确认最终参数</li>
+    <li><b>断点续传</b>：中途 Ctrl+C，重启后只补缺失帧并成功还原</li>
+    <li><b>续传命中</b>：接收端收一半后重开发送端页面（同一文件），fileId 不变，命中已有进度而非从头开始</li>
+    <li><b>参数错配</b>：故意传错 COLS 或 PAD，应全部拒绝并打印期望 / 实际对比，不产生污染文件</li>
+    <li><b>误码不污染</b>：抓屏后注入噪点，CRC 拦截全部坏帧，还原文件仍与源一致</li>
+    <li><b>元数据缺失保护</b>：屏蔽元数据帧时数据帧照常落盘，收齐后不启动还原</li>
+    <li><b>文件名安全</b>：构造 <code>../../evil.txt</code>、<code>..\..\x</code>、<code>CON</code>，应净化到 <code>output/</code> 之内</li>
+    <li><b>长文件名边界</b>：<code>12 + nameLen</code> 超限的元数据帧应丢弃并告警，不影响数据帧接收</li>
+    <li><b>背景干扰</b>：桌面并排打开多个黑色窗口后，角标仍应唯一锁定发送端画面</li>
+    <li><b>无摄像头可验证</b>：images + desktop 两条通道覆盖全部功能</li>
+  </ul>
+</section>
+
+<footer>
+  依据《数据单向传输方案.md》（原始设计）与《实施方案.md》（第三轮修订，协议冻结）整理 · 2026-09-21
+</footer>
+
+</main>
+</div>
+</body>
+</html>
