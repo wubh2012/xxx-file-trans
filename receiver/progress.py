@@ -58,9 +58,12 @@ class ProgressReporter:
         self._progress.stop()
         return False
 
-    def set_total(self, total: int) -> None:
-        """总帧数已知（首帧落地）后切定长进度。"""
+    def set_total(self, total: int, completed: int | None = None) -> None:
+        """总帧数已知（首帧落地）后切定长进度；completed 供断点续传重同步
+        （惰性加载的已收帧未经过 on_decoded，显式回填，issue #7）。"""
         self.total = total
+        if completed is not None:
+            self.received = completed
         self._refresh()
 
     def on_decoded(self, payload: bytes, is_new: bool) -> None:
@@ -89,7 +92,11 @@ class ProgressReporter:
                 )
         else:
             self._close_crc_streak()
-            self._log(f"丢弃帧 {name}：[{e.reason}] {e.detail}")
+            if e.reason == "param_lock":
+                # 参数锁定硬锁（协议 §6）：告警含处置指引，整帧拒绝
+                self._log(f"告警（param_lock）：{e.detail}")
+            else:
+                self._log(f"丢弃帧 {name}：[{e.reason}] {e.detail}")
         self._refresh()
 
     def stats_line(self) -> str:

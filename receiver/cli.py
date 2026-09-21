@@ -19,27 +19,37 @@ from receiver.store import FrameStore, IncompleteError
 
 
 def receive_images(args) -> int:
-    store = FrameStore()
-
-    # 实时进度（需求 F15）：帧数 / 百分比 / KB/s / 识别率 / 丢帧，
-    # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
-    with ProgressReporter() as reporter:
-        for name, img in iter_source("images", args.dir):
+    # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
+    # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
+    store = FrameStore(paths.PROGRESS_DIR)
+    try:
+        # 实时进度（需求 F15）：帧数 / 百分比 / KB/s / 识别率 / 丢帧，
+        # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
+        with ProgressReporter() as reporter:
             try:
-                frame: DecodedFrame = decode_frame(img)
-            except FrameRejected as e:
-                reporter.on_rejected(name, e)
-                continue
-            try:
-                is_new = store.add(frame)
-            except FrameRejected as e:
-                # 跨任务混帧（file_id / 帧总数 / 分片大小不一致）同样整帧拒绝
-                reporter.on_rejected(name, e)
-                continue
-            reporter.on_decoded(frame.payload, is_new)
-            if store.total_frames is not None:
-                reporter.set_total(store.total_frames)
-        reporter.finish()
+                for name, img in iter_source("images", args.dir):
+                    try:
+                        frame: DecodedFrame = decode_frame(img)
+                    except FrameRejected as e:
+                        reporter.on_rejected(name, e)
+                        continue
+                    try:
+                        is_new = store.add(frame)
+                    except FrameRejected as e:
+                        # 跨任务混帧 / 参数锁定硬锁（param_lock）同样整帧拒绝
+                        reporter.on_rejected(name, e)
+                        continue
+                    reporter.on_decoded(frame.payload, is_new)
+                    if store.total_frames is not None:
+                        reporter.set_total(store.total_frames,
+                                           completed=store.received_count())
+            except KeyboardInterrupt:
+                print("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧",
+                      file=sys.stderr)
+                return 1
+            reporter.finish()
+    finally:
+        store.close()
 
     if store.is_complete():
         try:

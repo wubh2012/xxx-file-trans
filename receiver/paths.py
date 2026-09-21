@@ -16,5 +16,5 @@ def anchor(*parts: str) -> Path:
 
 
 OUTPUT_DIR = anchor("output")  # 还原输出（F13）
-PROGRESS_DIR = anchor("progress")  # 断点续传任务目录（F12；meta.json 持久化属 #7）
+PROGRESS_DIR = anchor("progress")  # 断点续传任务目录（F12；#7：meta.json + 位图 + 定长文件）
 DEBUG_DIR = anchor("debug")  # 调试画面留存（后续票据）
