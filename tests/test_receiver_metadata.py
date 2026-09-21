@@ -14,9 +14,9 @@ import gzip
 import hashlib
 import os
 import shutil
-import tempfile
 import zlib
-from pathlib import Path
+
+import pytest
 
 import fixture_encoder
 from test_receiver_images import geometry, run_receive
@@ -96,33 +96,42 @@ def test_reserved_name_sanitized(tmp_path):
     assert names == ["_CON"], f"应净化为 _CON：{names}"
 
 
-def test_200_byte_name_boundary():
+def test_200_byte_name_boundary(tmp_path):
     """切片 2d：恰好 200 UTF-8 字节的文件名完整保留。
 
-    Windows 未启用长路径时，200 字节名叠加 pytest 深层临时目录
-    （pytest-of-<user>/pytest-<n>/test_...0/）会超 MAX_PATH（issue #14），
-    故本用例不用 tmp_path，改在 %TEMP% 根下建浅层工作目录。名称边界
-    语义（200 字节完整保留）不变。
+    Windows 未启用长路径时，200 字节名叠加过深的临时目录会超 MAX_PATH
+    （issue #14 → issue #17）：临时目录经 pytest.ini --basetemp 锚定到
+    仓库根浅层路径 .tmp/，不再跟随 %TEMP%；输出目录直接用 tmp_path
+    少套一层子目录，200 字节名才能落在余量内。若落盘路径仍逼近
+    MAX_PATH（basetemp 被改深 / 仓库克隆过深等），前置检查显式 skip
+    并说明原因，不报误导性 FileNotFoundError。名称边界语义（200 字节
+    完整保留）不变。
     """
     src = b"long name payload"
     name = "n" * 197 + "中"  # 197×1 + 3 = 200 字节
     assert len(name.encode("utf-8")) == 200
-    work = Path(tempfile.mkdtemp(prefix="ferry_"))
-    try:
-        comp = gzip.compress(src)
-        frames = work / "frames"
-        fixture_encoder.export_frames(
-            comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
-            filename=name, plain_size=len(src), **geometry(),
+    frames = tmp_path / "frames"
+    out = tmp_path  # 输出目录直接用 tmp_path：少一层嵌套，为 200 字节名省深度
+    # 前置检查取落盘最深的候选路径（还原文件名 vs frames PNG），MAX_PATH
+    # 260 留 ~5 字符余量
+    budget = 255
+    deepest = max((out / name, frames / "000001.png"), key=lambda p: len(str(p)))
+    if len(str(deepest)) > budget:
+        pytest.skip(
+            f"落盘路径 {len(str(deepest))} 字符逼近 MAX_PATH（临时目录过深），"
+            "跳过以免混同真实缺陷"
         )
-        out = work / "output"
 
-        r = run_receive(frames, out)
+    comp = gzip.compress(src)
+    fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename=name, plain_size=len(src), **geometry(),
+    )
 
-        assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
-        assert (out / name).is_file(), f"200 字节名应完整保留：{[p.name for p in out.iterdir()]}"
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+    r = run_receive(frames, out)
+
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert (out / name).is_file(), f"200 字节名应完整保留：{[p.name for p in out.iterdir()]}"
 
 
 def test_midstream_metadata_over_100_frames(tmp_path):

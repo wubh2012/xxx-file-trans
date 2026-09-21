@@ -8,3 +8,4 @@ debug/
 frames_png/
 frames.json
 .pytest_cache/
+.tmp/
