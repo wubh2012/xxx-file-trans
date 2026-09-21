@@ -1,10 +1,11 @@
 """CLI 入口：python -m receiver（docs 需求文档 §6 契约）。
 
-退出码：0 = 还原成功；1 = 未收齐 / 还原失败；2 = 用法错误。
+退出码：0 = 还原成功 / 统计完成；1 = 未收齐 / 还原失败 / 无帧可统计；2 = 用法错误。
 """
 
 import argparse
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -86,6 +87,30 @@ def receive_frames(args, frames) -> int:
     return 1
 
 
+def calibrate_frames(args) -> int:
+    """calibrate 统计模式（issue #11）：只统计不还原——不写还原文件、
+    不建任务目录，缺帧不影响统计完成。输出人读摘要 + 末行 JSON
+    （推荐参数 BIT/PAD，回灌发送端）。"""
+    from receiver.calibrate import format_report, run_calibration
+
+    if args.source == "images":
+        frames = iter_source("images", args.dir)
+    else:
+        try:
+            region = parse_region(args.region) if args.region else None
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        frames = iter_desktop(region=region)
+    report = run_calibration(frames)
+    if report["frames"] == 0:
+        print("无帧可统计：取帧源未产出任何画面", file=sys.stderr)
+        return 1
+    print(format_report(report))
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
 def _anchor_dirs(args) -> None:
     """任务目录锚定（需求 N4）：缺省输出锚定 output/，progress / debug 随建。"""
     if args.out is None:
@@ -104,12 +129,27 @@ def main(argv=None) -> int:
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H")
     p.add_argument("--out", type=Path, default=None,
                    help="还原输出目录（默认锚定脚本目录 output/，不依赖 cwd；显式给定值语义不变）")
+    c = sub.add_parser("calibrate", help="统计识别率 / CRC 通过率，输出推荐参数（不还原不落盘）")
+    c.add_argument("--source", required=True, choices=["images", "desktop", "video", "camera"], help="取帧源")
+    c.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
+    c.add_argument("--video", type=Path, help="video 源：录制视频文件")
+    c.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H")
     args = parser.parse_args(argv)
 
     try:
         startup_self_check()  # 协议 §3：两端启动时必须自检通过
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
+        return 2
+
+    if args.command == "calibrate":
+        if args.source == "images":
+            if not args.dir:
+                parser.error("--source images 需要 --dir <PNG 帧序列目录>")
+            return calibrate_frames(args)
+        if args.source == "desktop":
+            return calibrate_frames(args)
+        print(f"源 {args.source} 尚未实现（video: #10 / camera: #13）", file=sys.stderr)
         return 2
 
     if args.source == "images":

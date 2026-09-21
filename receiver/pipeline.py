@@ -61,6 +61,7 @@ class MeasuredGeometry:
     pad: int
     cols: int
     rows: int
+    side: int  # 角标边长实测值（px；calibrate 探针用于边长残差统计，#11）
 
 
 def parse_header(header: bytes) -> FrameHeader:
@@ -112,10 +113,12 @@ def _corner_distance(box: tuple[int, int, int, int], corner: str, img_w: int, im
     return dist[corner]()
 
 
-def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
-    """几何自举（ADR-0001）：检测角标 → BIT → 数据网格矩形 → COLS/ROWS/PAD。
+def measure_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
+    """几何自举测量（ADR-0001）：检测角标 → BIT → 数据网格矩形 → COLS/ROWS/PAD。
 
-    返回 (测量几何, 网格矩形 x0/y0/x1/y1)。任一约束不满足抛 FrameRejected('geometry')。
+    只测量、不做栅格整除性 / PAD 一致性等冻结校验（后者在 bootstrap_geometry）；
+    calibrate 探针（#11）需要未校验的原始测量值统计 ±1px 级残差。
+    测量本身不可能（无角标候选等）仍抛 FrameRejected('geometry')。
     """
     img_h, img_w = bw.shape
     cands = _solid_square_candidates(bw)
@@ -131,8 +134,6 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
     if max(sides) - min(sides) > _SIDE_EQUAL_TOL:
         raise FrameRejected("geometry", f"四角标边长不一致: {sides}")
     side = sum(sides) // 4
-    if side % 3 != 0:
-        raise FrameRejected("geometry", f"角标边长 {side} 不能被 3 整除")
     bit = side // 3
 
     # 角标内角 = 数据网格四角外角 → 网格矩形
@@ -141,15 +142,32 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
     x1 = boxes["tr"][0]
     y1 = boxes["bl"][1]
     gw, gh = x1 - x0, y1 - y0
-    if gw <= 0 or gh <= 0 or gw % bit != 0 or gh % bit != 0:
-        raise FrameRejected("geometry", f"网格尺寸 {gw}×{gh} 不是 BIT={bit} 的整数倍")
+    if gw <= 0 or gh <= 0:
+        raise FrameRejected("geometry", f"数据网格尺寸简并: {gw}×{gh}")
     cols, rows = gw // bit, gh // bit
 
-    # PAD：画布边沿到网格距离（画面即画布，发送端导出帧无额外留白）
-    pad_x, pad_y = x0 // bit, y0 // bit
-    if x0 % bit != 0 or y0 % bit != 0 or pad_x != pad_y:
+    # PAD：画布边沿到网格距离（画面即画布，发送端导出帧无额外留白）；
+    # 整除性 / 四角一致性是冻结校验，交 bootstrap_geometry
+    return MeasuredGeometry(bit=bit, pad=x0 // bit, cols=cols, rows=rows, side=side), \
+        (x0, y0, x1, y1)
+
+
+def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
+    """几何自举（ADR-0001）：测量 + 冻结校验（§5）。
+
+    返回 (测量几何, 网格矩形 x0/y0/x1/y1)。任一约束不满足抛 FrameRejected('geometry')。
+    """
+    geo, rect = measure_geometry(bw)
+    x0, y0, x1, y1 = rect
+    gw, gh = x1 - x0, y1 - y0
+    bit = geo.bit
+    if geo.side % 3 != 0:
+        raise FrameRejected("geometry", f"角标边长 {geo.side} 不能被 3 整除")
+    if gw % bit != 0 or gh % bit != 0:
+        raise FrameRejected("geometry", f"网格尺寸 {gw}×{gh} 不是 BIT={bit} 的整数倍")
+    if x0 % bit != 0 or y0 % bit != 0 or geo.pad != y0 // bit:
         raise FrameRejected("geometry", f"静默区宽度不一致: x={x0} y={y0}")
-    return MeasuredGeometry(bit=bit, pad=pad_x, cols=cols, rows=rows), (x0, y0, x1, y1)
+    return geo, rect
 
 
 def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, int, int]) -> bytes:
