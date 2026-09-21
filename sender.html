@@ -39,6 +39,11 @@
   #info td:first-child { color: #999; }
   #status { color: #8cf; min-height: 1.5em; }
   #stopHint { color: #777; font-size: 12px; }
+  #exportBtn {
+    background: #123; color: #eee; border: 1px solid #456; border-radius: 4px;
+    padding: 6px 14px; cursor: pointer; font: inherit;
+  }
+  #exportBtn:disabled { opacity: .5; cursor: default; }
   canvas { display: block; image-rendering: pixelated; }  /* 非整数 DPR 下仍按最近邻放大，方块边缘不插值 */
   /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景 */
   body.playing #ui { display: none; }
@@ -57,6 +62,7 @@
   <input id="file" type="file" hidden>
   <table id="info" hidden><tbody></tbody></table>
   <p id="status"></p>
+  <p><button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button></p>
   <p id="stopHint">播放中按 Esc 或点击画面即停止并返回本页。</p>
 </div>
 <canvas id="stage" hidden></canvas>
@@ -341,6 +347,111 @@ async function handleFile(file) {
   startPlayback();
 }
 
+/* ---------- 导出 PNG 序列（F9 最小实现，issue #5）：frames_png/<seq6>.png + frames.json ----------
+   闭环自测（CONTEXT.md）：导出目录直喂接收端 images 源，验证双端协议一致性。
+   帧序列与播放节奏完全一致：每轮首帧（数据帧 0 / 100 / 200 … 前）先插元数据帧。 */
+function ensureFrameState() {
+  if (!state.compBuf) throw new Error('尚未选择文件');
+  if (!state.geo) {
+    state.geo = deriveGeometry();
+    state.totalFrames = Math.ceil(state.compSize / state.geo.chunkSize);
+    updateInfo();
+  }
+}
+function exportSequence() {
+  const seqs = [];
+  for (let f = 0; f < state.totalFrames; f++) {
+    if (f % 100 === 0) seqs.push(-1);   // -1 = 元数据帧（docs/protocol.md §4）
+    seqs.push(f);
+  }
+  return seqs;
+}
+function pngBytes() {
+  return new Promise((resolve) => stage.toBlob(resolve, 'image/png'))
+    .then((blob) => blob.arrayBuffer())
+    .then((buf) => new Uint8Array(buf));
+}
+function buildFramesJson(totalExported) {
+  const g = state.geo;
+  return JSON.stringify({
+    fileId: '0x' + state.fileId.toString(16).toUpperCase().padStart(8, '0'),
+    fileName: state.fileName,
+    plainSize: state.plainSize,
+    compressedSize: state.compSize,
+    geometry: { COLS: g.COLS, ROWS: g.ROWS, BIT: g.BIT, PAD: g.PAD },
+    chunkSize: g.chunkSize,
+    totalFrames: state.totalFrames,
+    totalExported,
+    receiverCommand: 'python -m receiver receive --source images --dir frames_png --out output',
+  }, null, 2);
+}
+async function buildExportFrames() {
+  ensureFrameState();
+  setupCanvas();   // 画布尺寸就绪（hidden 状态下绘制与导出同样有效）
+  const files = [];
+  let seq = 0;
+  for (const f of exportSequence()) {
+    if (f < 0) renderMetadataFrame(); else renderFrame(f);
+    seq++;
+    files.push({ name: `frames_png/${String(seq).padStart(6, '0')}.png`, bytes: await pngBytes() });
+  }
+  files.push({ name: 'frames.json', text: buildFramesJson(seq) });
+  return files;
+}
+async function exportViaPicker(files) {
+  // 首选目录选择器：用户授权后真实写出 frames_png/ + frames.json
+  const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+  const pngDir = await dir.getDirectoryHandle('frames_png', { create: true });
+  for (const f of files) {
+    const target = f.name === 'frames.json'
+      ? await dir.getFileHandle('frames.json', { create: true })
+      : await pngDir.getFileHandle(f.name.split('/')[1], { create: true });
+    const w = await target.createWritable();
+    await w.write(f.bytes ?? f.text);
+    await w.close();
+  }
+}
+async function exportViaDownloads(files) {
+  // 回退：无目录选择权限 / 不支持时逐文件下载（自动化捕获即取外沿行为）
+  for (const f of files) {
+    const blob = f.bytes ? new Blob([f.bytes], { type: 'image/png' })
+                         : new Blob([f.text], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = f.name.includes('/') ? f.name.split('/')[1] : f.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    await new Promise((r) => setTimeout(r, 80));   // 逐个错开，便于自动化逐个捕获
+  }
+}
+el('exportBtn').addEventListener('click', async () => {
+  const btn = el('exportBtn');
+  btn.disabled = true;
+  try {
+    const files = await buildExportFrames();
+    setStatus('导出中…');
+    // 自动化环境（navigator.webdriver）：无原生对话框，直接走下载回退，
+    // 否则 showDirectoryPicker 在 headless 下会无限挂起
+    if (typeof window.showDirectoryPicker === 'function' && !navigator.webdriver) {
+      try {
+        await exportViaPicker(files);
+      } catch (e) {
+        if (e && e.name === 'AbortError') { setStatus('已取消导出'); return; }
+        await exportViaDownloads(files);   // 授权失败等场景回退为逐文件下载
+      }
+    } else {
+      await exportViaDownloads(files);
+    }
+    setStatus(`已导出 ${files.length} 个文件（frames_png/*.png + frames.json）`);
+  } catch (e) {
+    setStatus('导出失败：' + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ---------- UI ---------- */
 function el(id) { return document.getElementById(id); }
 function clampInt(v, lo, hi) {
@@ -395,7 +506,7 @@ if (!selfTest()) {
 window.__sender = {
   state, selfTest, crcUpdate, crcFinal, deriveGeometry,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
-  renderFrame, renderMetadataFrame,
+  renderFrame, renderMetadataFrame, buildExportFrames,
 };
 </script>
 </body>

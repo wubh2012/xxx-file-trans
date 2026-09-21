@@ -73,3 +73,14 @@ def test_metadata_frame_cadence_present():
     """插入节奏：每轮首帧 + 每 100 帧一次（docs/protocol.md §4，issue #6）。"""
     html = _html()
     assert re.search(r"%\s*100", html), "缺少每 100 帧插入元数据帧的节奏逻辑"
+
+
+def test_export_frames_feature_present():
+    """F9 最小实现：发送端可导出 frames_png/<seq6>.png + frames.json（issue #5）。
+
+    frames.json 内嵌对应接收端命令（F8），支撑闭环自测（CONTEXT.md）。
+    """
+    html = _html()
+    assert "frames_png" in html, "缺少 frames_png 导出布局"
+    assert "frames.json" in html, "缺少 frames.json 导出"
+    assert "--source images" in html, "frames.json 未内嵌接收端命令（F8）"

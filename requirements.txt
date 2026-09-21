@@ -3,3 +3,7 @@
 # rich（#8）、mss（#9）、winotify（#12）随对应票据加入。
 opencv-python
 numpy
+
+# 端到端闭环测试（issue #5）：缝 A 用 playwright 驱动 sender.html 导出。
+# 浏览器二进制需另行 `playwright install chromium`；未安装时 e2e 用例自动跳过。
+playwright
