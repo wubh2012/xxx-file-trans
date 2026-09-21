@@ -1,5 +1,6 @@
 # 接收端依赖（Python ≥ 3.11；spec「Implementation Decisions」）。
-# 按票据渐进添加：本票（#4）仅需图像解码与矩阵运算；
-# rich（#8）、mss（#9）、winotify（#12）随对应票据加入。
+# 按票据渐进添加：图像解码与矩阵运算（#4）、rich 实时进度（#8）；
+# mss（#9）、winotify（#12）随对应票据加入。
 opencv-python
 numpy
+rich
