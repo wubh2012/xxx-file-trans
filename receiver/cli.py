@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from receiver import paths
+from receiver.notify import default_notifier
 from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
 from receiver.progress import ProgressReporter
 from receiver.protocol import startup_self_check
@@ -19,8 +20,12 @@ from receiver.sources.desktop import iter_desktop, parse_region
 from receiver.store import FrameStore, IncompleteError
 
 
-def receive_frames(args, frames) -> int:
-    """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器（spec「模块划分」）。"""
+def receive_frames(args, frames, notify=None) -> int:
+    """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器（spec「模块划分」）。
+
+    notify 为可注入的完成通知边界（issue #12）：还原成功后以
+    notify(title, message) 报喜，失败路径不调用；None 时不通知
+    （真实默认实现见 receiver.notify）。"""
     # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
@@ -75,6 +80,18 @@ def receive_frames(args, frames) -> int:
             return 1
         dest.write_bytes(plain)
         print(f"还原完成：{dest}（{len(plain)} 字节，sha256 {hashlib.sha256(plain).hexdigest()[:16]}…）")
+        # payload 清理（issue #12）：还原成功后任务目录不再有续传价值，删除残留；
+        # 失败仅告警，不推翻已成功的还原
+        try:
+            store.cleanup_task()
+        except OSError as e:
+            print(f"告警：任务 payload 清理失败（{e}），可手动删除任务目录", file=sys.stderr)
+        # 完成通知（issue #12）：同理，通知发送失败只告警
+        if notify is not None:
+            try:
+                notify("文件摆渡还原完成", f"{dest.name}（{len(plain)} 字节）已还原到 {dest.parent}")
+            except Exception as e:
+                print(f"告警：完成通知发送失败（{e}）", file=sys.stderr)
         return 0
 
     if store.data_complete():
@@ -112,13 +129,17 @@ def main(argv=None) -> int:
         print(str(e), file=sys.stderr)
         return 2
 
+    # 完成通知（issue #12）：工厂自选 winotify 桌面通知或终端高亮降级，
+    # 一处接线，各取帧源分支共用
+    notify = default_notifier()
+
     if args.source == "images":
         if not args.dir:
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
         # 目录锚定（需求 N4）：默认输出与 progress / debug 目录锚定脚本目录，
         # 不依赖 cwd；显式 --out 语义不变
         _anchor_dirs(args)
-        return receive_frames(args, iter_source("images", args.dir))
+        return receive_frames(args, iter_source("images", args.dir), notify=notify)
 
     if args.source == "desktop":
         # 捕获区域（需求 F10）：`L,T,W,H` 解析为 mss 区域 dict，缺省全屏
@@ -128,7 +149,7 @@ def main(argv=None) -> int:
             parser.error(str(e))
             return 2  # 不可达（parser.error 直接退出），仅供类型检查
         _anchor_dirs(args)
-        return receive_frames(args, iter_desktop(region=region))
+        return receive_frames(args, iter_desktop(region=region), notify=notify)
 
     print(f"源 {args.source} 尚未实现（video: #10 / camera: #13）", file=sys.stderr)
     return 2

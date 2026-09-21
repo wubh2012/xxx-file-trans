@@ -17,6 +17,7 @@
 
 import json
 import os
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 
@@ -234,6 +235,15 @@ class FrameStore:
         if self._data_file is not None:
             self._data_file.close()
             self._data_file = None
+
+    def cleanup_task(self) -> None:
+        """清理本任务 payload 残留（issue #12）：还原成功后删除整个任务目录
+        （meta.json / data.bin / received.bin），磁盘不被已还原任务撑爆。
+        只动本 fileId 的任务目录；失败（如句柄占用）抛 OSError 由调用方
+        告警处置，不静默吞错；纯内存收集（无任务目录）为 no-op。"""
+        if self.task_dir is not None:
+            shutil.rmtree(self.task_dir)
+        self.task_dir = None
 
     # ---------- 收集判据与拼装 ----------
 

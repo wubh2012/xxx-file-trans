@@ -1,10 +1,15 @@
 # 接收端依赖（Python ≥ 3.11；spec「Implementation Decisions」）。
 # 按票据渐进添加：图像解码与矩阵运算（#4）、rich 实时进度（#8）、
-# mss 抓屏（#9）；winotify（#12）随对应票据加入。
+# mss 抓屏（#9）、winotify（#12）。
 opencv-python
 numpy
 rich
 mss
+
+# 可选（issue #12）：还原成功桌面通知 + 声音的主路径（Windows 部署建议
+# 安装）。缺省未安装时自动降级为终端高亮提示（receiver/notify.py），
+# 功能不受影响；注释安装以免测试期间真实弹窗刷屏。
+# winotify
 
 # 端到端闭环测试（issue #5）：缝 A 用 playwright 驱动 sender.html 导出。
 # 浏览器二进制需另行 `playwright install chromium`；未安装时 e2e 用例自动跳过。
