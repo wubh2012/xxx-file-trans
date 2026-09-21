@@ -14,7 +14,7 @@
   最小 BIT)，δ 取几何探针实测的残差最大绝对值（clean PNG 流 δ=0）；
 - 推荐 PAD = max(实测 PAD, 3)（角标 3×BIT 伸入静默区，PAD ≥ 3 冻结）。
 - 输出末行 JSON：BIT / PAD 与 sender.html 输入项（id=bit / id=pad）同名，
-  可直接回灌发送端。
+  可直接回灌发送端。FPS 不在推荐之列：画面统计不出帧率依据，不虚报。
 """
 
 import cv2
@@ -42,28 +42,38 @@ class CalibrationStats:
 
 
 def tally_frame(stats: CalibrationStats, outcome) -> None:
-    """单帧计入统计：FrameRejected 即拒绝（按原因），DecodedFrame 即通过。"""
+    """单帧计入统计：FrameRejected 即拒绝（按原因），DecodedFrame 即通过。
+
+    CRC 口径按 pipeline 校验顺序：CRC 在几何/帧头冻结校验之后、元数据校验
+    （reason='metadata'）之前——后者 CRC 已通过，计入分子分母两者。"""
     stats.frames += 1
     if isinstance(outcome, FrameRejected):
         stats.rejected[outcome.reason] += 1
         if outcome.reason == "crc":
             stats.crc_reached += 1
+        elif outcome.reason == "metadata":  # CRC 已过，随后被元数据校验拒绝
+            stats.crc_reached += 1
+            stats.crc_passed += 1
         return
     stats.decoded += 1
     stats.crc_reached += 1
     stats.crc_passed += 1
 
 
-def measure_stream_geometry(samples: Counter, decoded: list[DecodedFrame]) -> tuple[int, int]:
-    """实测几何：探针样本多数值优先（整帧被拒也能测得），无样本时退回
-    成功解码帧的帧头值（已与画面自举交叉校验一致）。"""
+def measure_stream_geometry(decoded: list[DecodedFrame],
+                            samples: list["GeometrySample"]) -> tuple[int, int] | None:
+    """实测几何：优先取成功解码帧帧头的多数值（已与画面自举交叉校验一致，
+    不受探针边长截断影响）；无解码帧（整流被冻结校验拒绝等）退回探针
+    样本多数值——探针绕过冻结校验，整流被拒时也能测得几何。
+    一帧都测不出（垃圾画面流）返回 None。"""
+    if decoded:
+        bits = Counter(f.header.bit for f in decoded)
+        pads = Counter(f.header.pad for f in decoded)
+        return bits.most_common(1)[0][0], pads.most_common(1)[0][0]
     if samples:
-        return samples.most_common(1)[0][0]
-    bits = Counter(f.header.bit for f in decoded)
-    pads = Counter(f.header.pad for f in decoded)
-    if not bits:
-        raise ValueError("无任何几何测量样本")
-    return bits.most_common(1)[0][0], pads.most_common(1)[0][0]
+        bit, pad = Counter((s.bit, s.pad) for s in samples).most_common(1)[0][0]
+        return bit, pad
+    return None
 
 
 def _fold(value: int, modulus: int) -> int:
@@ -128,9 +138,10 @@ def build_report(stats: CalibrationStats, samples: list[GeometrySample],
         return {"frames": 0}
     decode_rate = stats.decoded / stats.frames if stats.frames else 0.0
     crc_rate = stats.crc_passed / stats.crc_reached if stats.crc_reached else 0.0
-    measured_bit, measured_pad = measure_stream_geometry(
-        Counter((s.bit, s.pad) for s in samples), decoded)
+    geo = measure_stream_geometry(decoded, samples)
     residual_px = max((s.residual for s in samples), default=0)
+    # geo None（垃圾画面流，一帧都测不出）→ BIT/PAD = 0 表示无法推荐
+    measured_bit, measured_pad = geo if geo is not None else (0, 0)
     return {
         "frames": stats.frames,
         "decoded": stats.decoded,
@@ -140,42 +151,68 @@ def build_report(stats: CalibrationStats, samples: list[GeometrySample],
         "crcRate": crc_rate,
         "rejected": dict(stats.rejected),
         "probed": len(samples),
-        "measuredBit": measured_bit,
-        "measuredPad": measured_pad,
-        "residualPx": residual_px,
-        "BIT": max(measured_bit, min_safe_bit(residual_px)),
-        "PAD": max(measured_pad, 3),
+        "measuredBit": int(measured_bit),
+        "measuredPad": int(measured_pad),
+        "residualPx": int(residual_px),
+        "BIT": max(int(measured_bit), min_safe_bit(residual_px)) if geo is not None else 0,
+        "PAD": max(int(measured_pad), 3) if geo is not None else 0,
     }
 
 
 def format_report(report: dict) -> str:
     """人读摘要（机器可读 JSON 由 CLI 另起末行输出）。"""
-    return "\n".join([
+    lines = [
         f"帧数：{report['frames']}；识别 {report['decoded']}；"
         f"拒绝分布：{report['rejected'] or '无'}",
         f"识别率：{report['decodeRate']:.1%}（{report['decoded']}/{report['frames']}）",
         f"CRC 通过率：{report['crcRate']:.1%}"
-        f"（{report['crcPassed']}/{report['crcReached']}，进入 CRC 校验帧数）",
+        f"（{report['crcPassed']}/{report['crcReached']}，进入 CRC 校验帧数）"
+        if report["crcReached"] else "CRC 通过率：无帧进入 CRC 校验",
         f"实测几何：BIT={report['measuredBit']} PAD={report['measuredPad']}；"
-        f"栅格原点最大残差 {report['residualPx']} px",
+        f"栅格原点最大残差 {report['residualPx']} px"
+        if report["measuredBit"] else
+        "实测几何：无有效测量样本（画面无角标结构）",
         f"推荐参数：BIT={report['BIT']} PAD={report['PAD']}",
-    ])
+    ]
+    if report["residualPx"] >= 1:
+        # 推荐的作用边界（code-review #11）：±1px 级偏差当前由冻结几何校验
+        # （静默区宽度 / 网格整除性）整帧拒绝，与 BIT 无关；BIT 只决定
+        # 采样鲁棒性下限（ADR-0001），对齐问题须在采集端解决
+        lines.append(
+            f"警告：实测 ±{report['residualPx']}px 级几何偏差，该偏差由冻结几何"
+            "校验整帧拒绝（与 BIT 无关），建议改善采集对齐；"
+            "推荐 BIT 为采样鲁棒性下限（ADR-0001）"
+        )
+    return "\n".join(lines)
 
 
 def run_calibration(frames) -> dict:
-    """帧迭代器 → 统计报告 dict（含推荐参数，字段见 build_report）。"""
+    """帧迭代器 → 统计报告 dict（含推荐参数，字段见 build_report）。
+
+    Ctrl+C（desktop 等无限源）不丢弃已统计帧：中断时返回部分报告，
+    report['interrupted'] = True。"""
     stats = CalibrationStats()
     decoded: list[DecodedFrame] = []
     samples: list[GeometrySample] = []
-    for _name, img in frames:
-        try:
-            outcome = decode_frame(img)
-        except FrameRejected as e:
-            outcome = e
-        tally_frame(stats, outcome)
-        if isinstance(outcome, DecodedFrame):
-            decoded.append(outcome)
-        sample = probe_frame(img)
-        if sample is not None:
-            samples.append(sample)
-    return build_report(stats, samples, decoded)
+    interrupted = False
+    try:
+        for _name, img in frames:
+            try:
+                outcome = decode_frame(img)
+            except FrameRejected as e:
+                outcome = e
+            tally_frame(stats, outcome)
+            if isinstance(outcome, DecodedFrame):
+                decoded.append(outcome)
+                # 通过帧的几何已被冻结校验证明残差为 0，探针只测被拒帧
+                samples.append(GeometrySample(bit=outcome.header.bit,
+                                              pad=outcome.header.pad, residual=0))
+            else:
+                sample = probe_frame(img)
+                if sample is not None:
+                    samples.append(sample)
+    except KeyboardInterrupt:
+        interrupted = True
+    report = build_report(stats, samples, decoded)
+    report["interrupted"] = interrupted
+    return report

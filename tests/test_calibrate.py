@@ -149,6 +149,7 @@ def test_1px_shift_small_bit_recommends_safer_bit(tmp_path):
     assert report["decodeRate"] == 0.0, "平移帧应被冻结几何校验整帧拒绝"
     assert report["BIT"] == 7, "小 BIT 不足应反推出最小安全 BIT=7"
     assert report["BIT"] > report["measuredBit"]
+    assert "采集对齐" in r.stdout, "残差 ≥1px 时应警告偏差由冻结校验拒绝、与 BIT 无关"
 
 
 def test_1px_shift_large_bit_stays_recommended(tmp_path):
@@ -178,3 +179,37 @@ def test_empty_source_reports_no_frames(tmp_path):
 
     assert r.returncode == 1
     assert "无帧可统计" in r.stderr
+
+
+def test_metadata_rejected_frame_counts_as_crc_passed():
+    """单测：metadata 拒绝帧的 CRC 口径——CRC 已通过、随后被元数据校验拒绝，
+    应计入 CRC 分子分母两者（pipeline 校验顺序：CRC 在 metadata 校验之前）。"""
+    from receiver.calibrate import CalibrationStats, tally_frame
+    from receiver.protocol import FrameRejected
+
+    stats = CalibrationStats()
+    tally_frame(stats, FrameRejected("metadata", "12+nameLen 超出 CHUNK_SIZE"))
+    assert stats.frames == 1
+    assert stats.rejected == {"metadata": 1}
+    assert stats.crc_reached == 1
+    assert stats.crc_passed == 1
+
+
+def test_keyboard_interrupt_returns_partial_report():
+    """单测：desktop 等无限源 Ctrl+C → 返回已统计部分（interrupted=True），
+    已统计帧不丢弃。"""
+    import numpy as np
+
+    from receiver.calibrate import run_calibration
+
+    def endless_frames():
+        for i in range(3):
+            yield f"{i:06d}.png", np.zeros((10, 10), dtype=np.uint8)
+        raise KeyboardInterrupt
+
+    report = run_calibration(endless_frames())
+
+    assert report["interrupted"] is True
+    assert report["frames"] == 3
+    assert report["decodeRate"] == 0.0
+    assert report["BIT"] == 0, "无任何可测几何样本时不得虚报推荐参数"
