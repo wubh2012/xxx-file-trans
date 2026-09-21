@@ -6,10 +6,11 @@
 import argparse
 import hashlib
 import sys
-from collections import Counter
 from pathlib import Path
 
+from receiver import paths
 from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
+from receiver.progress import ProgressReporter
 from receiver.protocol import startup_self_check
 from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
@@ -19,24 +20,26 @@ from receiver.store import FrameStore, IncompleteError
 
 def receive_images(args) -> int:
     store = FrameStore()
-    discard = Counter()
 
-    for name, img in iter_source("images", args.dir):
-        try:
-            frame: DecodedFrame = decode_frame(img)
-        except FrameRejected as e:
-            discard[e.reason] += 1
-            print(f"丢弃帧 {name}：[{e.reason}] {e.detail}")
-            continue
-        store.add(frame)
-
-    total = 0
-    if store.received_count():
-        total = store.total_frames
-        print(f"已收 {store.received_count()}/{total} 帧", end="")
-        if discard:
-            print(f"，丢弃 {sum(discard.values())} 帧（{dict(discard)}）", end="")
-        print()
+    # 实时进度（需求 F15）：帧数 / 百分比 / KB/s / 识别率 / 丢帧，
+    # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
+    with ProgressReporter() as reporter:
+        for name, img in iter_source("images", args.dir):
+            try:
+                frame: DecodedFrame = decode_frame(img)
+            except FrameRejected as e:
+                reporter.on_rejected(name, e)
+                continue
+            try:
+                is_new = store.add(frame)
+            except FrameRejected as e:
+                # 跨任务混帧（file_id / 帧总数 / 分片大小不一致）同样整帧拒绝
+                reporter.on_rejected(name, e)
+                continue
+            reporter.on_decoded(frame.payload, is_new)
+            if store.total_frames is not None:
+                reporter.set_total(store.total_frames)
+        reporter.finish()
 
     if store.is_complete():
         try:
@@ -79,7 +82,8 @@ def main(argv=None) -> int:
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H")
-    p.add_argument("--out", type=Path, default=Path("output"), help="还原输出目录（默认 output/）")
+    p.add_argument("--out", type=Path, default=None,
+                   help="还原输出目录（默认锚定脚本目录 output/，不依赖 cwd；显式给定值语义不变）")
     args = parser.parse_args(argv)
 
     try:
@@ -91,6 +95,12 @@ def main(argv=None) -> int:
     if args.source == "images":
         if not args.dir:
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
+        # 目录锚定（需求 N4）：默认输出与 progress / debug 目录锚定脚本目录，
+        # 不依赖 cwd；显式 --out 语义不变
+        if args.out is None:
+            args.out = paths.OUTPUT_DIR
+        paths.PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+        paths.DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         return receive_images(args)
     print(f"源 {args.source} 尚未实现（desktop: #9 / video: #10 / camera: #13）", file=sys.stderr)
     return 2
