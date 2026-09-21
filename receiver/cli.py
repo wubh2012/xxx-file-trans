@@ -120,6 +120,12 @@ def main(argv=None) -> int:
         _anchor_dirs(args)
         return receive_frames(args, iter_source("images", args.dir))
 
+    if args.source == "camera":
+        # camera 骨架（issue #13）：统一迭代器接口占位（receiver/sources/camera.py），
+        # 完整摄像头采集不在本票范围，明确提示后退出
+        print("camera 源为接口骨架（issue #13），完整摄像头采集尚未实现", file=sys.stderr)
+        return 2
+
     if args.source == "desktop":
         # 捕获区域（需求 F10）：`L,T,W,H` 解析为 mss 区域 dict，缺省全屏
         try:
@@ -130,5 +136,5 @@ def main(argv=None) -> int:
         _anchor_dirs(args)
         return receive_frames(args, iter_desktop(region=region))
 
-    print(f"源 {args.source} 尚未实现（video: #10 / camera: #13）", file=sys.stderr)
+    print(f"源 {args.source} 尚未实现（video: #10）", file=sys.stderr)
     return 2
