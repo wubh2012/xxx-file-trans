@@ -12,6 +12,7 @@ from pathlib import Path
 from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
 from receiver.protocol import startup_self_check
 from receiver.restore import RestoreError, gunzip_verify
+from receiver.sanitize import safe_dest, sanitize_filename
 from receiver.sources import iter_source
 from receiver.store import FrameStore, IncompleteError
 
@@ -38,21 +39,33 @@ def receive_images(args) -> int:
         print()
 
     if store.is_complete():
-        # 豁免说明：冻结协议 §4 要求「元数据缺失不启动还原」，但本票
-        # （issue #4）的发送端尚未插入元数据帧（属 issue #6），验收标准
-        # 明文要求「数据帧收齐后 gunzip 落盘」。元数据门控还原随 #6 生效。
         try:
             plain = gunzip_verify(store.assemble())
         except (IncompleteError, RestoreError) as e:
             print(f"还原失败：{e}", file=sys.stderr)
             return 1
+        if len(plain) != store.metadata.plain_size:
+            print(
+                f"还原失败：plainSize 不一致（元数据声明 {store.metadata.plain_size}，"
+                f"实际解压 {len(plain)}）",
+                file=sys.stderr,
+            )
+            return 1
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 元数据帧（落盘文件名的唯一来源）属 issue #6；本票以 FILE_ID 兜底命名
-        dest = out_dir / f"restored-{store.file_id:08X}"
+        try:
+            dest = safe_dest(out_dir, sanitize_filename(store.metadata.name))
+        except ValueError as e:
+            print(f"还原失败：{e}", file=sys.stderr)
+            return 1
         dest.write_bytes(plain)
         print(f"还原完成：{dest}（{len(plain)} 字节，sha256 {hashlib.sha256(plain).hexdigest()[:16]}…）")
         return 0
+
+    if store.data_complete():
+        # §4：元数据帧是落盘文件名与还原截断长度的唯一来源，缺失不启动还原
+        print("元数据缺失：数据帧照常收下，不启动还原", file=sys.stderr)
+        return 1
 
     print("未收齐全部数据帧，不启动还原", file=sys.stderr)
     return 1

@@ -48,3 +48,28 @@ def test_crc_self_check_vector_embedded():
     html = _html()
     assert "123456789" in html
     assert re.search(r"0xCBF43926", html, re.IGNORECASE), "缺少自检向量期望值 0xCBF43926"
+
+
+def test_metadata_frame_building_present():
+    """元数据帧构造必须存在且符合冻结布局（docs/protocol.md §4，issue #6）。
+
+    发送端是浏览器单文件，缝 A（playwright 驱动）属 issue #5；本票以
+    静态约束锁定：0xFFFFFF 哨兵、12+nameLen 布局字段、CRC 落位。
+    """
+    html = _html()
+    assert "0xFFFFFF" in html, "缺少元数据帧号哨兵 0xFFFFFF"
+    for marker in ("buildMetadataFrame", "plainSize", "compressedSize", "nameLen"):
+        assert marker in html, f"缺少元数据帧布局标记: {marker}"
+
+
+def test_oversized_metadata_guard_present():
+    """发送端必须拦截 12+nameLen 超出 CHUNK_SIZE 的文件名（§4 接收端整帧
+    丢弃的对称防御），不得静默产出每轮必被拒收的废元数据帧。"""
+    html = _html()
+    assert "超出单帧 CHUNK_SIZE" in html, "缺少超长文件名拦截提示"
+
+
+def test_metadata_frame_cadence_present():
+    """插入节奏：每轮首帧 + 每 100 帧一次（docs/protocol.md §4，issue #6）。"""
+    html = _html()
+    assert re.search(r"%\s*100", html), "缺少每 100 帧插入元数据帧的节奏逻辑"

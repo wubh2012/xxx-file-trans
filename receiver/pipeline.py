@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from receiver.metadata import FIXED_BYTES as METADATA_FIXED_BYTES
+from receiver.metadata import FileMetadata, parse_metadata
 from receiver.protocol import (
     FRAME_NO_METADATA,
     HEADER_BYTES,
@@ -48,6 +50,7 @@ class FrameHeader:
 class DecodedFrame:
     header: FrameHeader
     payload: bytes  # 数据区有效字节（DATA_LEN 截断，补位不计）
+    metadata: FileMetadata | None = None  # 仅元数据帧非 None（§4）
 
 
 @dataclass
@@ -205,4 +208,16 @@ def decode_frame(img: np.ndarray) -> DecodedFrame:
 
     verify_crc(header, grid_bytes[HEADER_BYTES:])
     payload = grid_bytes[HEADER_BYTES : HEADER_BYTES + h.data_len]
+    if h.frame_no == FRAME_NO_METADATA:
+        # §4：12 + nameLen 超出本帧 CHUNK_SIZE 的元数据帧整帧丢弃并告警，
+        # 不影响数据帧接收；nameLen 以数据区前 11 字节声明值为准
+        if len(payload) < 11:
+            raise FrameRejected("metadata", f"元数据帧数据区 {len(payload)} 字节不足")
+        name_len = int.from_bytes(payload[9:11], "big")
+        if METADATA_FIXED_BYTES + name_len > h.chunk_size:
+            raise FrameRejected(
+                "metadata",
+                f"12+nameLen={METADATA_FIXED_BYTES + name_len} 超出 CHUNK_SIZE {h.chunk_size}",
+            )
+        return DecodedFrame(header=h, payload=payload, metadata=parse_metadata(payload))
     return DecodedFrame(header=h, payload=payload)

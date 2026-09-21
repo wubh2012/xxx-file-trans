@@ -20,6 +20,7 @@ import numpy as np
 HEADER_BITS = 208
 SYNC = b"\xF0\xA5"
 VER = 0x01
+FRAME_NO_METADATA = 0xFFFFFF  # 元数据帧哨兵（docs/protocol.md §4）
 
 
 def frame_capacity(cols: int, rows: int) -> int:
@@ -117,6 +118,19 @@ def signed_header(file_id: int, frame_no: int, total_frames: int, data: bytes,
     return bytes(header)
 
 
+def metadata_payload(filename: str, plain_size: int, compressed_size: int) -> bytes:
+    """元数据帧数据区：12 + nameLen 布局（docs/protocol.md §4，大端序）。"""
+    name = filename.encode("utf-8")
+    return (
+        b"\x01"  # 压缩方式：gzip
+        + plain_size.to_bytes(4, "big")
+        + compressed_size.to_bytes(4, "big")
+        + len(name).to_bytes(2, "big")
+        + b"\x00"  # 保留
+        + name
+    )
+
+
 def export_frames(
     payload: bytes,
     file_id: int,
@@ -125,19 +139,35 @@ def export_frames(
     rows: int = 48,
     bit: int = 4,
     pad: int = 3,
+    filename: str | None = None,
+    plain_size: int | None = None,
 ) -> list:
     """整包 payload 分片封帧并导出 PNG 序列（000001.png 起，发送端 frames_png 布局）。
+
+    filename 非 None 时按发送端节奏插入元数据帧：每轮首帧（数据帧 0 前）+
+    每 100 数据帧前各一帧，与数据帧统一连续编号。filename=None 不插元数据
+    帧（元数据缺失场景）。超长元数据帧（12+nameLen 超出 CHUNK_SIZE）无法
+    物理渲染，由调用方拿帧头自行手搓（见 test_receiver_metadata.py）。
 
     返回 PNG 路径列表。几何错配 / 坏 CRC 场景由调用方拿到帧头后自行改写重画。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     chunk = frame_capacity(cols, rows)
     total = (len(payload) + chunk - 1) // chunk
+    seq = 0
     paths: list[Path] = []
     for frame_no in range(total):
+        if filename is not None and frame_no % 100 == 0:
+            mp = metadata_payload(filename, len(payload) if plain_size is None else plain_size, len(payload))
+            header = signed_header(file_id, FRAME_NO_METADATA, total, mp, chunk, cols, rows, bit, pad)
+            seq += 1
+            p = out_dir / f"{seq:06d}.png"
+            render_png(header, mp, bit, pad, p)
+            paths.append(p)
         data = payload[frame_no * chunk : (frame_no + 1) * chunk]
         header = signed_header(file_id, frame_no, total, data, chunk, cols, rows, bit, pad)
-        p = out_dir / f"{frame_no + 1:06d}.png"
+        seq += 1
+        p = out_dir / f"{seq:06d}.png"
         render_png(header, data, bit, pad, p)
         paths.append(p)
     return paths

@@ -144,8 +144,7 @@ function buildHeader(frameNo) {
 }
 
 /* 帧 → COLS×ROWS 位网格：行优先、字节内 MSB first，黑块 = 1 */
-function encodeFrameGrid(frameNo) {
-  const header = buildHeader(frameNo);
+function encodeFrameGrid(header, data) {
   const gridBytes = new Uint8Array(state.geo.COLS * state.geo.ROWS / 8);
   let bitPos = 0;
   const writeBits = (bytes) => {
@@ -159,8 +158,43 @@ function encodeFrameGrid(frameNo) {
     }
   };
   writeBits(header);
-  writeBits(frameSlice(frameNo));
-  return { header, gridBytes, dataLen: frameDataLen(frameNo) };
+  writeBits(data);
+  return gridBytes;
+}
+
+/* ---------- 元数据帧（docs/protocol.md §4）：帧号 0xFFFFFF，12+nameLen 布局 ---------- */
+function buildMetadataPayload() {
+  const name = new TextEncoder().encode(state.fileName);
+  const p = new Uint8Array(12 + name.length);
+  const dv = new DataView(p.buffer);
+  p[0] = 0x01;                                    // 压缩方式：gzip
+  dv.setUint32(1, state.plainSize);               // plainSize（原始文件大小）
+  dv.setUint32(5, state.compSize);                // compressedSize（压缩后大小）
+  dv.setUint16(9, name.length);                   // nameLen（文件名字节长）
+  p[11] = 0x00;                                   // 保留
+  p.set(name, 12);
+  return p;
+}
+function buildMetadataFrame() {
+  const payload = buildMetadataPayload();
+  const h = new Uint8Array(26);
+  const dv = new DataView(h.buffer);
+  h[0] = 0xF0; h[1] = 0xA5;                       // SYNC（不参与 CRC）
+  h[2] = 0x01;                                    // VER
+  dv.setUint32(3, state.fileId);                  // FILE_ID
+  h[7] = 0xFF; h[8] = 0xFF; h[9] = 0xFF;          // FRAME_NO = 0xFFFFFF（元数据哨兵）
+  h[10] = (state.totalFrames >>> 16) & 0xFF;      // TOTAL_FRAMES：数据帧数（不含元数据帧）
+  h[11] = (state.totalFrames >>> 8) & 0xFF;
+  h[12] = state.totalFrames & 0xFF;
+  dv.setUint16(13, payload.length);               // DATA_LEN = 12 + nameLen
+  dv.setUint16(15, state.geo.chunkSize);          // CHUNK_SIZE
+  h[17] = state.geo.COLS;
+  h[18] = state.geo.ROWS;
+  h[19] = (state.geo.BIT << 4) | state.geo.PAD;   // GEO：高 4 bit BIT，低 4 bit PAD
+  h[20] = 0x80; h[21] = 0x00;                     // FLAGS：bit15 = gzip
+  // CRC 覆盖偏移 2–21 + 数据区有效字节（冻结关键）
+  dv.setUint32(22, crcFinal(crcUpdate(payload, crcUpdate(h.subarray(2, 22), 0xFFFFFFFF))));
+  return { header: h, payload };
 }
 
 /* ---------- 渲染：离屏 1px/块 → 整数倍 BIT 放大 + 黑静默区 + 白角标 ---------- */
@@ -178,9 +212,8 @@ function setupCanvas() {
   frameImage = gridCtx.createImageData(COLS, ROWS);
 }
 
-function renderFrame(frameNo) {
+function renderGrid(gridBytes) {
   const { BIT, PAD, COLS, ROWS } = state.geo;
-  const { gridBytes } = encodeFrameGrid(frameNo);
   const px = frameImage.data;                       // 先全白（0），再点黑（1）
   for (let i = 0; i < px.length; i++) px[i] = 255;
   for (let byte = 0; byte < gridBytes.length; byte++) {
@@ -207,14 +240,29 @@ function renderFrame(frameNo) {
   ctx.fillRect(ox + gw, oy + gh, m, m);
 }
 
-/* ---------- 播放循环：无限循环重播（元数据帧插入节奏属后续票据） ---------- */
-let rafId = 0, lastTs = 0, frameIdx = 0;
+function renderFrame(frameNo) {
+  renderGrid(encodeFrameGrid(buildHeader(frameNo), frameSlice(frameNo)));
+}
+function renderMetadataFrame() {
+  const m = buildMetadataFrame();
+  renderGrid(encodeFrameGrid(m.header, m.payload));
+}
+
+/* ---------- 播放循环：无限循环重播；元数据帧占一拍，每轮首帧（数据帧 0 前）
+   与每 100 数据帧前各插一帧（docs/protocol.md §4） ---------- */
+let rafId = 0, lastTs = 0, frameIdx = 0, metaShown = false;
 function loop(ts) {
   if (!state.playing) return;
   if (ts - lastTs >= 1000 / state.geo.FPS) {
     lastTs = ts;
-    renderFrame(frameIdx);
-    frameIdx = (frameIdx + 1) % state.totalFrames;
+    if (!metaShown && frameIdx % 100 === 0) {
+      metaShown = true;
+      renderMetadataFrame();
+    } else {
+      metaShown = false;
+      renderFrame(frameIdx);
+      frameIdx = (frameIdx + 1) % state.totalFrames;
+    }
   }
   rafId = requestAnimationFrame(loop);
 }
@@ -231,12 +279,19 @@ async function startPlayback() {
   }
   state.totalFrames = Math.ceil(state.compSize / state.geo.chunkSize);
   if (state.totalFrames > 0xFFFFFF) { setStatus('文件过大：帧号超出 3 字节上限', true); return; }
+  // 元数据帧 12+nameLen 超出 CHUNK_SIZE 时接收端必整帧丢弃（§4），发送端在此拦截，
+  // 避免每轮元数据永远缺失、文件无法还原且无提示
+  const nameBytes = new TextEncoder().encode(state.fileName).length;
+  if (12 + nameBytes > state.geo.chunkSize) {
+    setStatus(`文件名过长：12+nameLen=${12 + nameBytes} 超出单帧 CHUNK_SIZE ${state.geo.chunkSize}，无法发送`, true);
+    return;
+  }
   updateInfo();
   setupCanvas();
   stage.hidden = false;
   document.body.classList.add('playing');
   state.playing = true;
-  frameIdx = 0; lastTs = -1e9;
+  frameIdx = 0; metaShown = false; lastTs = -1e9;
   rafId = requestAnimationFrame(loop);
 }
 
@@ -337,7 +392,11 @@ if (!selfTest()) {
 }
 
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
-window.__sender = { state, selfTest, crcUpdate, crcFinal, deriveGeometry, encodeFrameGrid, renderFrame };
+window.__sender = {
+  state, selfTest, crcUpdate, crcFinal, deriveGeometry,
+  encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
+  renderFrame, renderMetadataFrame,
+};
 </script>
 </body>
 </html>

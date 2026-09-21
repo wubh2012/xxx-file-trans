@@ -41,11 +41,14 @@ def geometry():
 
 
 def test_single_frame_roundtrip(tmp_path):
-    """切片 1：单帧 PNG 序列 → CLI 还原，字节与源文件一致。"""
+    """切片 1：单帧 PNG 序列（含元数据帧）→ CLI 还原，字节与源文件一致。"""
     src = (b"hello ferry, " * 20)[:237]  # 单帧容量 262 B 内
     comp = gzip.compress(src)
     frames = tmp_path / "frames"
-    fixture_encoder.export_frames(comp, zlib.crc32(src) & 0xFFFFFFFF, frames, **geometry())
+    fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename="hello.bin", plain_size=len(src), **geometry(),
+    )
     out = tmp_path / "output"
 
     r = run_receive(frames, out)
@@ -53,6 +56,7 @@ def test_single_frame_roundtrip(tmp_path):
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     files = list(out.iterdir())
     assert len(files) == 1, f"应落盘恰好一个还原文件，实际 {files}"
+    assert files[0].name == "hello.bin"
     assert files[0].read_bytes() == src
 
 
@@ -62,7 +66,10 @@ def test_multi_frame_roundtrip_sha256(tmp_path):
     comp = gzip.compress(src)
     assert len(comp) > 262, "前置失效：应分片为多帧"
     frames = tmp_path / "frames"
-    fixture_encoder.export_frames(comp, zlib.crc32(src) & 0xFFFFFFFF, frames, **geometry())
+    fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename="multi.bin", plain_size=len(src), **geometry(),
+    )
     out = tmp_path / "output"
 
     r = run_receive(frames, out)
@@ -70,6 +77,7 @@ def test_multi_frame_roundtrip_sha256(tmp_path):
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     files = list(out.iterdir())
     assert len(files) == 1
+    assert files[0].name == "multi.bin"
     assert hashlib.sha256(files[0].read_bytes()).digest() == hashlib.sha256(src).digest()
 
 
@@ -79,14 +87,18 @@ def test_bad_crc_frame_discarded(tmp_path):
     src = b"payload under attack"
     comp = gzip.compress(src)
     frames = tmp_path / "frames"
-    paths = fixture_encoder.export_frames(comp, zlib.crc32(src) & 0xFFFFFFFF, frames, **geometry())
+    paths = fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename="attack.bin", plain_size=len(src), **geometry(),
+    )
     out = tmp_path / "output"
 
-    # 噪点注入：翻转数据区有效字节内的一个方块颜色（任一 bit 翻转即 CRC 失败；
+    # 噪点注入：翻转数据帧（paths[-1]，paths[0] 是元数据帧）有效字节内的
+    # 一个方块颜色（任一 bit 翻转即 CRC 失败；
     # 注意补位区不参与 CRC，必须打在 DATA_LEN 覆盖的格子内）
     import cv2
 
-    img = cv2.imread(str(paths[0]), cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(str(paths[-1]), cv2.IMREAD_GRAYSCALE)
     bit, pad = 4, 3
     row, col = 6, 0  # cell = 6*48 = 288 → byte 36，落在有效数据区内（帧头 26B 之后）
     cy = (pad + row) * bit + bit // 2
@@ -136,7 +148,10 @@ def test_missing_frame_not_restored(tmp_path):
     src = os.urandom(1500)  # 多帧
     comp = gzip.compress(src)
     frames = tmp_path / "frames"
-    paths = fixture_encoder.export_frames(comp, zlib.crc32(src) & 0xFFFFFFFF, frames, **geometry())
+    paths = fixture_encoder.export_frames(
+        comp, zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename="missing.bin", plain_size=len(src), **geometry(),
+    )
     paths[-1].unlink()  # 抽掉末帧
     out = tmp_path / "output"
 
@@ -152,7 +167,10 @@ def test_corrupt_gzip_isize_fails_restore(tmp_path):
     comp = bytearray(gzip.compress(src))
     comp[-4] ^= 0xFF  # 损坏尾部 ISIZE（帧 CRC 仍自洽）
     frames = tmp_path / "frames"
-    fixture_encoder.export_frames(bytes(comp), zlib.crc32(src) & 0xFFFFFFFF, frames, **geometry())
+    fixture_encoder.export_frames(
+        bytes(comp), zlib.crc32(src) & 0xFFFFFFFF, frames,
+        filename="isize.bin", plain_size=len(src), **geometry(),
+    )
     out = tmp_path / "output"
 
     r = run_receive(frames, out)
