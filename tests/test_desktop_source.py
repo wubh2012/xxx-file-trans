@@ -85,7 +85,8 @@ def _frames_with_noise(paths: list[Path]):
 
     1. 每个传输帧捕获两次 → 稳定放行；
     2. 好帧之间插一次随机画面（RDP 过渡画面，不稳定 → 永不放行）；
-    3. 第 2 个数据帧放行后，插入它的坏帧变体（翻转一个格子）稳定两帧
+    3. 第 2 个数据帧放行后，插入它的坏帧变体稳定两帧（翻转 8×8 = 4 个
+       方块，损坏面积须超闸门伪影容差，否则被变化检测吞掉而非放行）
        —— 闸门放行、CRC 整帧拒绝，不得污染已收好帧。
     """
     emitted = 0
@@ -99,7 +100,7 @@ def _frames_with_noise(paths: list[Path]):
         emitted += 1
         if emitted == 3 and not bad_drawn:  # paths[0] 是元数据帧，paths[3] 是数据帧 2
             bad = good.copy()
-            bad[40:44, 40:44] = 255 - bad[40:44, 40:44]
+            bad[40:48, 40:48] = 255 - bad[40:48, 40:48]
             bad_drawn = True
             yield bad
             yield bad
