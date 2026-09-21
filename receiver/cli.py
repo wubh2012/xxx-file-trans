@@ -15,10 +15,12 @@ from receiver.protocol import startup_self_check
 from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
 from receiver.sources import iter_source
+from receiver.sources.desktop import iter_desktop, parse_region
 from receiver.store import FrameStore, IncompleteError
 
 
-def receive_images(args) -> int:
+def receive_frames(args, frames) -> int:
+    """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器（spec「模块划分」）。"""
     # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
@@ -27,7 +29,7 @@ def receive_images(args) -> int:
         # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
         with ProgressReporter() as reporter:
             try:
-                for name, img in iter_source("images", args.dir):
+                for name, img in frames:
                     try:
                         frame: DecodedFrame = decode_frame(img)
                     except FrameRejected as e:
@@ -84,6 +86,14 @@ def receive_images(args) -> int:
     return 1
 
 
+def _anchor_dirs(args) -> None:
+    """任务目录锚定（需求 N4）：缺省输出锚定 output/，progress / debug 随建。"""
+    if args.out is None:
+        args.out = paths.OUTPUT_DIR
+    paths.PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    paths.DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="receiver", description="跨隔离网络单向文件摆渡接收端")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -107,10 +117,18 @@ def main(argv=None) -> int:
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
         # 目录锚定（需求 N4）：默认输出与 progress / debug 目录锚定脚本目录，
         # 不依赖 cwd；显式 --out 语义不变
-        if args.out is None:
-            args.out = paths.OUTPUT_DIR
-        paths.PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
-        paths.DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-        return receive_images(args)
-    print(f"源 {args.source} 尚未实现（desktop: #9 / video: #10 / camera: #13）", file=sys.stderr)
+        _anchor_dirs(args)
+        return receive_frames(args, iter_source("images", args.dir))
+
+    if args.source == "desktop":
+        # 捕获区域（需求 F10）：`L,T,W,H` 解析为 mss 区域 dict，缺省全屏
+        try:
+            region = parse_region(args.region) if args.region else None
+        except ValueError as e:
+            parser.error(str(e))
+            return 2  # 不可达（parser.error 直接退出），仅供类型检查
+        _anchor_dirs(args)
+        return receive_frames(args, iter_desktop(region=region))
+
+    print(f"源 {args.source} 尚未实现（video: #10 / camera: #13）", file=sys.stderr)
     return 2
