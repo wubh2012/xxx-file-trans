@@ -39,7 +39,7 @@
   #info td:first-child { color: #999; }
   #status { color: #8cf; min-height: 1.5em; }
   #stopHint { color: #777; font-size: 12px; }
-  #exportBtn {
+  #exportBtn, #copyCmdBtn {
     background: #123; color: #eee; border: 1px solid #456; border-radius: 4px;
     padding: 6px 14px; cursor: pointer; font: inherit;
   }
@@ -62,7 +62,8 @@
   <input id="file" type="file" hidden>
   <table id="info" hidden><tbody></tbody></table>
   <p id="status"></p>
-  <p><button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button></p>
+  <p><button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button>
+     <button id="copyCmdBtn" type="button">一键复制接收端命令</button></p>
   <p id="stopHint">播放中按 Esc 或点击画面即停止并返回本页。</p>
 </div>
 <canvas id="stage" hidden></canvas>
@@ -97,6 +98,7 @@ const state = {
   geo: null,          // { BIT, PAD, COLS, ROWS, FPS, chunkSize }
   totalFrames: 0,
   playing: false,
+  mode: 'desktop',  // 当前发送模式：desktop=全屏播放 / images=导出 PNG（决定复制按钮的接收端命令）
 };
 
 /* ---------- 几何推导：按屏幕自动反推 COLS/ROWS ---------- */
@@ -274,6 +276,7 @@ function loop(ts) {
 }
 
 async function startPlayback() {
+  state.mode = 'desktop';
   // 先争取全屏再反推几何：全屏成功时窗口 = 屏幕；被拒时按当前窗口反推，
   // 画布必然完整可见、四角角标不被裁掉（几何自举依赖角标）
   try { await document.documentElement.requestFullscreen(); } catch (e) {}  // 非手势场景失败则窗口播放
@@ -350,6 +353,16 @@ async function handleFile(file) {
 /* ---------- 导出 PNG 序列（F9 最小实现，issue #5）：frames_png/<seq6>.png + frames.json ----------
    闭环自测（CONTEXT.md）：导出目录直喂接收端 images 源，验证双端协议一致性。
    帧序列与播放节奏完全一致：每轮首帧（数据帧 0 / 100 / 200 … 前）先插元数据帧。 */
+/* 接收端命令生成（Story 6，issue #18）：复制按钮与 frames.json 同源。
+   几何参数由接收端角标自举推导（Story 12），不进命令行，两端参数对齐
+   落在源与路径上；desktop 源几何自举，无需传 COLS/ROWS/BIT 等参数。 */
+const RECEIVER_COMMANDS = {
+  desktop: { label: '全屏播放', cmd: 'python -m receiver receive --source desktop --out output' },
+  images:  { label: '导出 PNG', cmd: 'python -m receiver receive --source images --dir frames_png --out output' },
+};
+function buildReceiverCommand(mode) {
+  return RECEIVER_COMMANDS[mode].cmd;
+}
 function ensureFrameState() {
   if (!state.compBuf) throw new Error('尚未选择文件');
   if (!state.geo) {
@@ -382,7 +395,7 @@ function buildFramesJson(totalExported) {
     chunkSize: g.chunkSize,
     totalFrames: state.totalFrames,
     totalExported,
-    receiverCommand: 'python -m receiver receive --source images --dir frames_png --out output',
+    receiverCommand: buildReceiverCommand('images'),
   }, null, 2);
 }
 async function buildExportFrames() {
@@ -444,11 +457,26 @@ el('exportBtn').addEventListener('click', async () => {
     } else {
       await exportViaDownloads(files);
     }
+    // 复制按钮命令随发送模式切换（issue #18）：导出成功才置 images，
+    // 取消 / 失败时 frames_png 未产出，命令不得指向不存在的帧目录
+    state.mode = 'images';
     setStatus(`已导出 ${files.length} 个文件（frames_png/*.png + frames.json）`);
   } catch (e) {
     setStatus('导出失败：' + e.message, true);
   } finally {
     btn.disabled = false;
+  }
+});
+
+/* 一键复制接收端命令（Story 6，issue #18）：命令与当前发送模式一致。
+   剪贴板失败（非安全上下文 / 权限拒绝）给出可见错误并附带命令文本，便于手动复制 */
+el('copyCmdBtn').addEventListener('click', async () => {
+  const { label, cmd } = RECEIVER_COMMANDS[state.mode];
+  try {
+    await navigator.clipboard.writeText(cmd);
+    setStatus(`已复制接收端命令（${label}）：${cmd}`);
+  } catch (e) {
+    setStatus(`复制失败（${e && e.message ? e.message : e}）：请手动复制——${cmd}`, true);
   }
 });
 
@@ -506,7 +534,7 @@ if (!selfTest()) {
 window.__sender = {
   state, selfTest, crcUpdate, crcFinal, deriveGeometry,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
-  renderFrame, renderMetadataFrame, buildExportFrames,
+  renderFrame, renderMetadataFrame, buildExportFrames, buildReceiverCommand,
 };
 </script>
 </body>

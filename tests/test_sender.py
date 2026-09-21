@@ -8,7 +8,10 @@ sender.html 是 file:// 直开的零依赖单文件页面，浏览器外沿之�
 - CRC 自检向量（docs/protocol.md §7）内嵌于页面启动自检。
 """
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -84,3 +87,47 @@ def test_export_frames_feature_present():
     assert "frames_png" in html, "缺少 frames_png 导出布局"
     assert "frames.json" in html, "缺少 frames.json 导出"
     assert "--source images" in html, "frames.json 未内嵌接收端命令（F8）"
+
+
+def test_copy_receiver_command_feature_present():
+    """Story 6（issue #18）：一键复制接收端命令按钮 + 同源命令生成函数。
+
+    按钮命令随发送模式变化（desktop=全屏播放 / images=导出 PNG）；
+    frames.json 的 receiverCommand 与按钮同源，不残留硬编码字面量。
+    """
+    html = _html()
+    assert 'id="copyCmdBtn"' in html, "缺少一键复制接收端命令按钮"
+    assert "buildReceiverCommand" in html, "缺少与按钮同源的命令生成函数"
+    assert "navigator.clipboard" in html, "缺少剪贴板写入调用"
+    # frames.json 的 receiverCommand 由生成函数产出（与按钮同源），非硬编码字符串
+    assert re.search(r"receiverCommand:\s*buildReceiverCommand\(", html), \
+        "frames.json receiverCommand 应由 buildReceiverCommand 生成，消除硬编码"
+    for flag in ("--source desktop", "--source images", "--dir frames_png", "--out output"):
+        assert flag in html, f"命令生成函数缺少 flag: {flag}"
+
+
+def _receiver_receive_help_options() -> set:
+    """缝 B 外沿：子进程跑 `python -m receiver receive --help`，收集其全部选项。"""
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
+    r = subprocess.run(
+        [sys.executable, "-m", "receiver", "receive", "--help"],
+        cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert r.returncode == 0, f"receive --help 执行失败：{r.stderr}"
+    return set(re.findall(r"--[a-z]+", r.stdout))
+
+
+def test_receiver_command_flags_covered_by_cli_help():
+    """验收标准（issue #18）：命令在接收端可直接执行——buildReceiverCommand
+    用到的全部 flag 都被 `receive --help` 覆盖，CLI 契约变更即报警。"""
+    html = _html()
+    cmds = re.findall(r"'(python -m receiver receive[^']*)'", html)
+    assert len(cmds) == 2, f"应有 desktop / images 两条接收端命令，实际 {cmds}"
+
+    flags = set()
+    for c in cmds:
+        flags.update(re.findall(r"--[a-z]+", c))
+    assert flags, "未从命令中解析出任何 flag"
+
+    missing = flags - _receiver_receive_help_options()
+    assert not missing, f"命令 flag 未被 receive --help 覆盖: {missing}"

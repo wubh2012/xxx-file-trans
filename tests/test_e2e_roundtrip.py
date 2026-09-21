@@ -104,8 +104,9 @@ def test_export_layout_and_frames_json(exported):
     assert frames_json["totalExported"] == (
         frames_json["totalFrames"] + (frames_json["totalFrames"] + 99) // 100
     ), "PNG 帧数应等于数据帧 + 按节奏插入的元数据帧"
-    assert "--source images" in frames_json["receiverCommand"], "未内嵌接收端命令（F8）"
-    assert "--dir frames_png" in frames_json["receiverCommand"]
+    assert frames_json["receiverCommand"] == (
+        "python -m receiver receive --source images --dir frames_png --out output"
+    ), "receiverCommand 应为与复制按钮同源的 images 模式命令（F8，issue #18）"
 
     geo = frames_json["geometry"]
     assert {"COLS", "ROWS", "BIT", "PAD"} <= set(geo), "frames.json 缺几何参数"
