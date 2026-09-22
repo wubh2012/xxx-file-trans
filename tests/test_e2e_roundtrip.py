@@ -35,7 +35,9 @@ SOURCE_BYTES = os.urandom(8000)  # 随机数据 gzip 后近似原长 → 必然�
 
 def run_receive(frames_dir: Path, out_dir: Path) -> subprocess.CompletedProcess:
     """缝 B：与 test_receiver_images 同款子进程外沿，独立成文避免测试互耦。"""
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
+    env = {**os.environ, "PYTHONUTF8": "1",
+           # PYTHONPATH 前置 tests/_stubs：winotify 落在静默替身上（issue #23），还原成功不弹真实通知
+           "PYTHONPATH": str(ROOT / "tests" / "_stubs") + os.pathsep + str(ROOT)}
     return subprocess.run(
         [str(PYTHON), "-m", "receiver", "receive", "--source", "images",
          "--dir", str(frames_dir), "--out", str(out_dir)],

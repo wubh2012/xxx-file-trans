@@ -12,15 +12,20 @@ from pathlib import Path
 from receiver import paths
 from receiver.calibrate import format_report, run_calibration
 from receiver.notify import default_notifier
+from receiver.pick import pick_region
 from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
 from receiver.progress import ProgressReporter
 from receiver.protocol import startup_self_check
 from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
 from receiver.sources import iter_source
-from receiver.sources.desktop import iter_desktop, parse_region
+from receiver.sources.desktop import format_region, iter_desktop, parse_region
 from receiver.sources.video import iter_video
 from receiver.store import FrameStore, IncompleteError
+
+
+class PickCancelled(Exception):
+    """--region pick 用户取消（Esc / 关闭覆盖窗）：明确中止，不回退整屏（issue #22）。"""
 
 
 def receive_frames(args, frames, notify=None) -> int:
@@ -133,7 +138,25 @@ def _add_source_args(p) -> None:
     p.add_argument("--source", required=True, choices=["images", "desktop", "video", "camera"], help="取帧源")
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
-    p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H")
+    p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
+
+
+def _desktop_region(parser, args) -> dict | None:
+    """desktop 源捕获区域（需求 F10 + issue #22）：`L,T,W,H` 解析为 mss
+    区域 dict；`pick` 为交互框选特例值（不新增子命令，receive / calibrate
+    共用）——确认后回显等效参数，取消抛 PickCancelled（不静默回退整屏）。"""
+    if args.region == "pick":
+        region = pick_region()
+        if region is None:
+            raise PickCancelled()
+        print(f"已框选区域：--region {format_region(region)}"
+              f"（下次可直接粘贴跳过框选）")
+        return region
+    try:
+        return parse_region(args.region) if args.region else None
+    except ValueError as e:
+        parser.error(str(e))
+        return 2  # 不可达（parser.error 直接退出），仅供类型检查
 
 
 def _frames_or_error(parser, args):
@@ -146,13 +169,7 @@ def _frames_or_error(parser, args):
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
         return iter_source("images", args.dir)
     if args.source == "desktop":
-        # 捕获区域（需求 F10）：`L,T,W,H` 解析为 mss 区域 dict，缺省全屏
-        try:
-            region = parse_region(args.region) if args.region else None
-        except ValueError as e:
-            parser.error(str(e))
-            return 2  # 不可达（parser.error 直接退出），仅供类型检查
-        return iter_desktop(region=region)
+        return iter_desktop(region=_desktop_region(parser, args))
     # video（#10）：缺参用法错误；打不开的报错见调用方
     if not args.video:
         parser.error("--source video 需要 --video <录制视频文件>")
@@ -198,11 +215,18 @@ def main(argv=None) -> int:
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
+        except PickCancelled:
+            print("已取消框选（Esc）：采集中止", file=sys.stderr)
+            return 1
 
     # 完成通知（issue #12）：工厂自选 winotify 桌面通知或终端高亮降级，
     # 一处接线，仅 receive 路径使用
     notify = default_notifier()
-    frames = _frames_or_error(parser, args)
+    try:
+        frames = _frames_or_error(parser, args)
+    except PickCancelled:
+        print("已取消框选（Esc）：采集中止", file=sys.stderr)
+        return 1
     # 目录锚定（需求 N4）：默认输出与 progress / debug 目录锚定脚本目录，
     # 不依赖 cwd；显式 --out 语义不变
     _anchor_dirs(args)

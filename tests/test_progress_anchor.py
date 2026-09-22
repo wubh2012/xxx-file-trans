@@ -30,7 +30,9 @@ if not PYTHON.is_file():  # 非 Windows / 无 venv 时退回当前解释器
 
 def run_receive(frames_dir: Path, out_dir: Path | None, *, cwd: Path = ROOT) -> subprocess.CompletedProcess:
     """运行接收端 CLI；out_dir 为 None 时不传 --out（测默认锚定）。"""
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
+    env = {**os.environ, "PYTHONUTF8": "1",
+           # PYTHONPATH 前置 tests/_stubs：winotify 落在静默替身上（issue #23），还原成功不弹真实通知
+           "PYTHONPATH": str(ROOT / "tests" / "_stubs") + os.pathsep + str(ROOT)}
     cmd = [str(PYTHON), "-m", "receiver", "receive", "--source", "images",
            "--dir", str(frames_dir)]
     if out_dir is not None:

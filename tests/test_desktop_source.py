@@ -210,3 +210,66 @@ def test_cli_desktop_dispatch_passes_region(monkeypatch):
     rc = main(["receive", "--source", "desktop", "--region", "15,25,320,240"])
     assert rc == 1
     assert seen["region"] == {"left": 15, "top": 25, "width": 320, "height": 240}
+
+
+# ---------- --region pick（issue #22）：CLI 进程内 + pick_region 注入替身 ----------
+
+def test_cli_pick_dispatch_passes_region_and_echoes(monkeypatch, capsys):
+    """--region pick → pick_region 替身被调用，region 直通 desktop 源；
+    终端回显等效 `--region L,T,W,H`（下次可直接粘贴跳过框选，story 14）。"""
+    import receiver.cli as cli
+
+    seen = {}
+
+    def fake_iter_desktop(region=None):
+        seen["region"] = region
+        yield "desktop-000001", np.zeros((10, 10), np.uint8)
+        raise KeyboardInterrupt  # 框选后 Ctrl+C 中止（真实生成器异常在迭代中发生）
+
+    monkeypatch.setattr(cli, "pick_region",
+                        lambda: {"left": 15, "top": 25, "width": 320, "height": 240})
+    monkeypatch.setattr(cli, "iter_desktop", fake_iter_desktop)
+
+    rc = cli.main(["receive", "--source", "desktop", "--region", "pick"])
+
+    assert rc == 1
+    assert seen["region"] == {"left": 15, "top": 25, "width": 320, "height": 240}
+    assert "--region 15,25,320,240" in capsys.readouterr().out
+
+
+def test_cli_pick_cancelled_aborts_with_exit_1(monkeypatch, capsys):
+    """Esc 取消 → 明确中止提示 + 退出码 1（story 13），不静默回退整屏。"""
+    import receiver.cli as cli
+
+    def assert_not_reached(region=None):
+        raise AssertionError("取消后不得进入抓屏")
+
+    monkeypatch.setattr(cli, "pick_region", lambda: None)
+    monkeypatch.setattr(cli, "iter_desktop", assert_not_reached)
+
+    rc = cli.main(["receive", "--source", "desktop", "--region", "pick"])
+
+    assert rc == 1
+    assert "取消" in capsys.readouterr().err
+
+
+def test_cli_calibrate_pick_dispatch(monkeypatch, capsys):
+    """calibrate 同路共用 pick 入口（story 18）：分派传参 + 回显一致。"""
+    import receiver.cli as cli
+
+    seen = {}
+
+    def fake_iter_desktop(region=None):
+        seen["region"] = region
+        raise KeyboardInterrupt  # 未产出画面 → 无帧可统计（生成器异常在迭代时发生）
+        yield  # 不可达：仅使本函数成为生成器，与真实 desktop 源一致
+
+    monkeypatch.setattr(cli, "pick_region",
+                        lambda: {"left": 1, "top": 2, "width": 3, "height": 4})
+    monkeypatch.setattr(cli, "iter_desktop", fake_iter_desktop)
+
+    rc = cli.main(["calibrate", "--source", "desktop", "--region", "pick"])
+
+    assert rc == 1
+    assert seen["region"] == {"left": 1, "top": 2, "width": 3, "height": 4}
+    assert "--region 1,2,3,4" in capsys.readouterr().out

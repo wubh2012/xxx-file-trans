@@ -32,6 +32,11 @@ def parse_region(text: str) -> dict:
     return {"left": left, "top": top, "width": width, "height": height}
 
 
+def format_region(region: dict) -> str:
+    """mss 区域 dict → `L,T,W,H`（--region 文本格式的逆，与 parse_region 同源）。"""
+    return f"{region['left']},{region['top']},{region['width']},{region['height']}"
+
+
 def _ensure_dpi_awareness() -> None:
     """Windows：per-monitor DPI aware（失败不致命，抓屏仍可用、坐标可能缩放）。"""
     if sys.platform != "win32":

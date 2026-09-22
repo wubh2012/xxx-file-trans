@@ -28,7 +28,10 @@ if not PYTHON.is_file():  # 非 Windows / 无 venv 时退回当前解释器
 
 
 def run_receive(frames_dir: Path, out_dir: Path) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
+    # PYTHONPATH 前置 tests/_stubs：winotify 落在静默替身上（issue #23），
+    # 还原成功路径不弹真实 Windows 通知；工厂选择路径照常走到 DesktopNotifier
+    env = {**os.environ, "PYTHONUTF8": "1",
+           "PYTHONPATH": str(ROOT / "tests" / "_stubs") + os.pathsep + str(ROOT)}
     return subprocess.run(
         [str(PYTHON), "-m", "receiver", "receive", "--source", "images",
          "--dir", str(frames_dir), "--out", str(out_dir)],

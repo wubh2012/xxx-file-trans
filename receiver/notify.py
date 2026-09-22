@@ -1,9 +1,10 @@
 """完成通知（issue #12）：还原成功 → Windows 桌面通知 + 声音（winotify）。
 
-winotify 是可选依赖：仅在本模块内导入，缺失时 default_notifier() 自动
-降级为终端高亮提示（TerminalNotifier），不装 winotify 的环境照常工作。
+winotify 自 #23 起为正式依赖；仅在本模块内导入，未安装的环境
+default_notifier() 仍自动降级为终端高亮提示（TerminalNotifier），照常工作。
 真实弹窗无法在测试中验证，DesktopNotifier 保持薄适配（构造 → 设声音 →
-show），通知发送边界由 CLI 的 notify 参数注入（receiver.cli.receive_frames）。
+show），通知发送边界由 CLI 的 notify 参数注入（receiver.cli.receive_frames）；
+子进程测试经 tests/_stubs/winotify.py 静默替身走同一工厂选择路径。
 """
 
 from rich.console import Console
