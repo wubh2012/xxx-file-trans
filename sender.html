@@ -1,17 +1,20 @@
 <!doctype html>
 <!-- 发送端最小封帧播放（issue #3）。
      file:// 直开、零网络请求、零依赖。协议唯一基准：docs/protocol.md。
+     播放模式一等化（issue #21）：全屏播放（camera 拍摄配全屏）与窗口播放
+     （desktop 抓屏配窗口，复制命令自动带 --region pick）显式切换。
      几何约定（本页为实现基准，接收端几何自举按此推导）：
        - 静默区为黑色，宽度 = PAD × BIT 像素（PAD 单位 = BIT 像素）；
        - 角标 = 白色实心方块，边长严格 = 3×BIT 像素，内角与数据网格四角
          外角重合、伸入静默区（对角线方向），因此要求 PAD ≥ 3；
        - 画布总尺寸 = (COLS + 2×PAD) × BIT 乘 (ROWS + 2×PAD) × BIT，
-         按屏幕自动反推 COLS/ROWS，整数倍缩放（1 方块 = BIT 像素，无插值）；
+         按播放模式反推 COLS/ROWS：全屏按屏幕、窗口按视口减四周垫边
+         （垫边为页面背景色，量级不进协议）；
        - 全部几何按**物理像素**设计（issue #20）：屏幕尺寸与 BIT 输入均经
          devicePixelRatio（OS 缩放 × 页面缩放）换算为物理值，帧头 BIT 声明
          物理值——接收端抓屏测得物理像素与帧头天然一致，显示缩放 125%/150%
          不再阻塞冻结校验；画布 CSS 显示尺寸 = 位图 ÷ dpr，1 位图 px = 1
-         物理 px，全屏播放不拉伸（宁有黑边）。 -->
+         物理 px，不拉伸（宁有黑边）。 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -44,20 +47,34 @@
   #info td:first-child { color: #999; }
   #status { color: #8cf; min-height: 1.5em; }
   #stopHint { color: #777; font-size: 12px; }
-  #exportBtn, #copyCmdBtn {
+  #exportBtn, #copyCmdBtn, #playBtn {
     background: #123; color: #eee; border: 1px solid #456; border-radius: 4px;
     padding: 6px 14px; cursor: pointer; font: inherit;
   }
-  #exportBtn:disabled { opacity: .5; cursor: default; }
+  #exportBtn:disabled, #playBtn:disabled { opacity: .5; cursor: default; }
+  .modeBtn {
+    background: #111; color: #bbb; border: 1px solid #444; border-radius: 4px;
+    padding: 4px 12px; cursor: pointer; font: inherit;
+  }
+  .modeBtn[aria-pressed="true"] { background: #123; color: #fff; border-color: #8cf; }
   canvas { display: block; image-rendering: pixelated; }  /* 非整数 DPR 下仍按最近邻放大，方块边缘不插值 */
   canvas[hidden] { display: none; }  /* 作者样式会覆盖 [hidden] 的 UA display:none，须显式还原（否则停止播放后画布仍占位挤压 UI） */
   /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景。
-     画布必须锚定画面左上角（不居中）：接收端几何自举按「画面即画布」
-     推 PAD（pad = 网格原点 ÷ BIT，见 receiver/pipeline.py），画布小于
-     屏幕时（非整除余量 / 黑边）居中会让网格原点带任意偏移，原点不再
-     是 PAD×BIT 的整数倍 → 整帧被拒。左上角锚定保证原点恒为 PAD×BIT。 */
+     播放模式一等化（issue #21）：body 同时标注当前模式。全屏画布锚定
+     画面左上角（既有行为）；窗口画布居中、body 内边距垫静默边（背景
+     同色黑，量级不进协议——裁切容忍后任意边距均可，issue #22），几何
+     推导同步减去垫边（WINDOW_PAD_CSS）。停止按钮固定在垫边内、不与
+     画布重叠（亮色元素混入抓屏会污染角标检测），故按钮深色、画布距
+     视口边缘 ≥ 48px。 */
   body.playing #ui { display: none; }
   body.playing { justify-content: flex-start; align-items: flex-start; }
+  body.playing.window { justify-content: center; align-items: center; padding: 48px; }
+  #stopBtn {
+    display: none; position: fixed; top: 8px; right: 8px; z-index: 10;
+    background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px;
+    padding: 4px 12px; cursor: pointer; font: inherit;
+  }
+  body.playing.window #stopBtn { display: block; }
 </style>
 </head>
 <body>
@@ -69,14 +86,21 @@
     <label>PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
     <label>FPS <input id="fps" type="number" min="1" max="30" value="5"></label>
   </fieldset>
-  <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 全屏循环播放）</div>
+  <fieldset>
+    <legend>播放模式</legend>
+    <button id="modeFullscreen" type="button" class="modeBtn" aria-pressed="true">全屏播放（camera 拍摄）</button>
+    <button id="modeWindow" type="button" class="modeBtn" aria-pressed="false">窗口播放（desktop 抓屏）</button>
+  </fieldset>
+  <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 按所选模式循环播放）</div>
   <input id="file" type="file" hidden>
   <table id="info" hidden><tbody></tbody></table>
   <p id="status"></p>
-  <p><button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button>
+  <p><button id="playBtn" type="button" disabled>开始播放</button>
+     <button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button>
      <button id="copyCmdBtn" type="button">一键复制接收端命令</button></p>
-  <p id="stopHint">播放中按 Esc 或点击画面即停止并返回本页。</p>
+  <p id="stopHint">全屏播放：按 Esc 或点击画面即停止并返回本页。</p>
 </div>
+<button id="stopBtn" type="button">停止播放（Esc）</button>
 <canvas id="stage" hidden></canvas>
 <script>
 'use strict';
@@ -109,19 +133,27 @@ const state = {
   geo: null,          // { BIT, PAD, COLS, ROWS, FPS, chunkSize }
   totalFrames: 0,
   playing: false,
-  mode: 'desktop',  // 当前发送模式：desktop=全屏播放 / images=导出 PNG（决定复制按钮的接收端命令）
+  mode: 'desktop',       // 当前发送模式：desktop=屏幕播放 / images=导出 PNG（决定复制按钮的接收端命令）
+  playMode: 'fullscreen', // 播放模式（issue #21）：fullscreen=全屏（camera 拍摄）/ window=窗口（desktop 抓屏）
 };
 
 /* ---------- 几何推导：按屏幕自动反推 COLS/ROWS（物理像素口径，issue #20） ---------- */
+const WINDOW_PAD_CSS = 48;  // 窗口播放四周垫边（CSS px，量级不进协议，与 body.playing.window 的 padding 一致）
 function deriveGeometry() {
   // 一律按物理像素推导：devicePixelRatio = OS 缩放 × 页面缩放，一并覆盖
   // 显示缩放（125%/150%）与页面缩放（Ctrl+-）两种场景。接收端（mss 抓屏）
   // 看到的是物理像素，帧头 BIT 声明物理值才能通过冻结校验（协议 §5）
   const dpr = window.devicePixelRatio || 1;
-  // 取窗口与屏幕的较小者：全屏成功时两者相等；全屏被拒时按当前窗口反推，
-  // 保证画布完整可见、四角角标不被裁掉（接收端几何自举依赖角标）
-  const W = Math.round(Math.min(screen.width, innerWidth) * dpr);
-  const H = Math.round(Math.min(screen.height, innerHeight) * dpr);
+  // 可用 CSS 尺寸：全屏取窗口与屏幕的较小者（全屏成功时两者相等，既有口径）；
+  // 窗口取视口减四周垫边（issue #21），保证画布完整可见且不贴窗口边框
+  const availW = state.playMode === 'window'
+    ? innerWidth - 2 * WINDOW_PAD_CSS
+    : Math.min(screen.width, innerWidth);
+  const availH = state.playMode === 'window'
+    ? innerHeight - 2 * WINDOW_PAD_CSS
+    : Math.min(screen.height, innerHeight);
+  const W = Math.max(1, Math.round(availW * dpr));
+  const H = Math.max(1, Math.round(availH * dpr));
   const pad = clampInt(el('pad').value, 3, 15);   // PAD < 3 放不下 3×BIT 角标
   // BIT 输入为 CSS px/块，换算为物理像素并取整（整数 BIT 是 ADR-0001 测量模型前提）
   let bit = Math.max(1, Math.round(clampInt(el('bit').value, 1, 15) * dpr));
@@ -299,9 +331,12 @@ function loop(ts) {
 
 async function startPlayback() {
   state.mode = 'desktop';
-  // 先争取全屏再反推几何：全屏成功时窗口 = 屏幕；被拒时按当前窗口反推，
-  // 画布必然完整可见、四角角标不被裁掉（几何自举依赖角标）
-  try { await document.documentElement.requestFullscreen(); } catch (e) {}  // 非手势场景失败则窗口播放
+  // 播放模式一等化（issue #21）：显式所选模式播放，不再「全屏优先、失败降级」。
+  // 窗口播放不请求全屏；全屏播放先争取全屏再反推几何（被拒时按当前窗口，
+  // 画布完整可见、四角角标不被裁掉——几何自举依赖角标）
+  if (state.playMode !== 'window') {
+    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+  }
   try {
     state.geo = deriveGeometry();
   } catch (e) {
@@ -320,7 +355,7 @@ async function startPlayback() {
   updateInfo();
   setupCanvas();
   stage.hidden = false;
-  document.body.classList.add('playing');
+  document.body.classList.add('playing', state.playMode);   // 模式标注供样式与自动化
   state.playing = true;
   frameIdx = 0; metaShown = false; lastTs = -1e9;
   rafId = requestAnimationFrame(loop);
@@ -330,7 +365,8 @@ function stopPlayback() {
   state.playing = false;
   cancelAnimationFrame(rafId);
   stage.hidden = true;
-  document.body.classList.remove('playing');
+  document.body.classList.remove('playing', 'fullscreen', 'window');
+  el('playBtn').disabled = false;   // 文件已加载，可直接换模式重播
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 
@@ -368,22 +404,39 @@ async function handleFile(file) {
   for (const c of chunks) { state.compBuf.set(c, off); off += c.length; }
   state.compSize = size;
 
-  setStatus('已就绪，开始全屏循环播放');
+  setStatus(`已就绪：${PLAY_MODES[state.playMode].label}，循环播放中`);
+  el('playBtn').disabled = false;
   startPlayback();
 }
 
 /* ---------- 导出 PNG 序列（F9 最小实现，issue #5）：frames_png/<seq6>.png + frames.json ----------
    闭环自测（CONTEXT.md）：导出目录直喂接收端 images 源，验证双端协议一致性。
    帧序列与播放节奏完全一致：每轮首帧（数据帧 0 / 100 / 200 … 前）先插元数据帧。 */
-/* 接收端命令生成（Story 6，issue #18）：复制按钮与 frames.json 同源。
-   几何参数由接收端角标自举推导（Story 12），不进命令行，两端参数对齐
-   落在源与路径上；desktop 源几何自举，无需传 COLS/ROWS/BIT 等参数。 */
-const RECEIVER_COMMANDS = {
-  desktop: { label: '全屏播放', cmd: 'python -m receiver receive --source desktop --out output' },
-  images:  { label: '导出 PNG', cmd: 'python -m receiver receive --source images --dir frames_png --out output' },
+/* 播放模式注册表（issue #21）：显示名 / 配对取帧源 / 停止提示 / desktop
+   源命令的单一事实源。模式行为差异（几何可用尺寸、是否请求全屏、点击
+   是否停止）保留在各职责点的分支，不进此表。 */
+const PLAY_MODES = {
+  fullscreen: {
+    label: '全屏播放', source: 'camera 拍摄',
+    stopHint: '全屏播放：按 Esc 或点击画面即停止并返回本页。',
+    desktopCmd: 'python -m receiver receive --source desktop --out output',
+  },
+  window: {
+    label: '窗口播放', source: 'desktop 抓屏',
+    stopHint: '窗口播放：按 Esc 或「停止播放」按钮停止；点击画面不会停止。',
+    desktopCmd: 'python -m receiver receive --source desktop --region pick --out output',
+  },
 };
-function buildReceiverCommand(mode) {
-  return RECEIVER_COMMANDS[mode].cmd;
+
+/* 接收端命令生成（Story 6，issue #18/#21/#22）：复制按钮与 frames.json 同源。
+   命令随发送模式（desktop/images）与播放模式（全屏/窗口）联动：窗口播放
+   自动带 `--region pick`（接收端冻屏框选）；全屏播放与导出 PNG 命令不变，
+   既有流程零影响。几何参数由接收端角标自举推导，不进命令行。 */
+const IMAGES_RECEIVER_COMMAND =
+  'python -m receiver receive --source images --dir frames_png --out output';
+function buildReceiverCommand(sendMode = state.mode) {
+  if (sendMode === 'images') return IMAGES_RECEIVER_COMMAND;
+  return PLAY_MODES[state.playMode].desktopCmd;
 }
 function ensureFrameState() {
   if (!state.compBuf) throw new Error('尚未选择文件');
@@ -491,12 +544,17 @@ el('exportBtn').addEventListener('click', async () => {
 });
 
 /* 一键复制接收端命令（Story 6，issue #18）：命令与当前发送模式一致。
+   窗口播放附带「先播放后接收」顺序提示（Spec Further Notes：由复制命令
+   的状态文案承载，只进状态不进剪贴板——粘贴即可直接执行）。
    剪贴板失败（非安全上下文 / 权限拒绝）给出可见错误并附带命令文本，便于手动复制 */
 el('copyCmdBtn').addEventListener('click', async () => {
-  const { label, cmd } = RECEIVER_COMMANDS[state.mode];
+  const cmd = buildReceiverCommand();
+  const label = state.mode === 'images' ? '导出 PNG' : PLAY_MODES[state.playMode].label;
+  const hint = state.mode === 'desktop' && state.playMode === 'window'
+    ? '（先播放后接收：先开始窗口播放，再运行接收端框选）' : '';
   try {
     await navigator.clipboard.writeText(cmd);
-    setStatus(`已复制接收端命令（${label}）：${cmd}`);
+    setStatus(`已复制接收端命令（${label}）：${cmd}${hint}`);
   } catch (e) {
     setStatus(`复制失败（${e && e.message ? e.message : e}）：请手动复制——${cmd}`, true);
   }
@@ -542,8 +600,26 @@ drop.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
   if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
-stage.addEventListener('click', stopPlayback);
+
+/* ---------- 播放模式一等化（issue #21）：全屏 / 窗口显式切换 ---------- */
+function setPlayMode(mode) {
+  state.playMode = mode;
+  const m = PLAY_MODES[mode];
+  el('modeFullscreen').setAttribute('aria-pressed', String(mode === 'fullscreen'));
+  el('modeWindow').setAttribute('aria-pressed', String(mode === 'window'));
+  el('stopHint').textContent = m.stopHint;
+  setStatus(`播放模式：${m.label}（${m.source}）`);
+}
+el('modeFullscreen').addEventListener('click', () => setPlayMode('fullscreen'));
+el('modeWindow').addEventListener('click', () => setPlayMode('window'));
+el('playBtn').addEventListener('click', () => { if (state.compBuf) startPlayback(); });
+
+stage.addEventListener('click', () => {
+  // 窗口播放禁用点击停止（story 4）：抓屏 / 框选时防误触；全屏保留既有交互
+  if (state.playMode !== 'window') stopPlayback();
+});
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopPlayback(); });
+el('stopBtn').addEventListener('click', stopPlayback);
 
 if (!selfTest()) {
   setStatus('CRC 自检未通过（期望 CRC32("123456789") == 0xCBF43926），已禁用发送', true);

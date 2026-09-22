@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SENDER = ROOT / "sender.html"
 
 DESKTOP_CMD = "python -m receiver receive --source desktop --out output"
+DESKTOP_PICK_CMD = "python -m receiver receive --source desktop --region pick --out output"
 IMAGES_CMD = "python -m receiver receive --source images --dir frames_png --out output"
 
 
@@ -58,6 +59,38 @@ def test_copy_follows_send_mode(page, tmp_path):
     assert read_clipboard(page) == DESKTOP_CMD
 
     # 导出（自动化环境走下载回退）：完成后状态行可见，模式随之切到 images
+    page.click("#exportBtn")
+    page.wait_for_selector("#status:has-text('已导出')", timeout=15000)
+    page.click("#copyCmdBtn")
+    assert read_clipboard(page) == IMAGES_CMD
+
+
+def test_copy_window_mode_carries_region_pick_and_order_hint(page, tmp_path):
+    """窗口播放（issue #21/#22，Spec Story 5）：命令自动带 `--region pick`，
+    「先播放后接收」顺序提示由状态文案承载（剪贴板只有可直接执行的命令）。"""
+    src = tmp_path / "tiny.bin"
+    src.write_bytes(b"0" * 10000)
+    page.click("#modeWindow")
+    page.set_input_files("#file", str(src))
+    page.wait_for_selector("body.playing", timeout=15000)
+    page.keyboard.press("Escape")
+
+    page.click("#copyCmdBtn")
+    assert read_clipboard(page) == DESKTOP_PICK_CMD
+    status = page.text_content("#status")
+    assert "--region pick" in status and "先播放后接收" in status, status
+
+
+def test_export_command_unaffected_by_play_mode(page, tmp_path):
+    """导出 PNG 流程不受播放模式影响（Spec Story 22）：窗口播放下导出后
+    命令仍是 images 源命令，frames_png 闭环通道保持稳定。"""
+    src = tmp_path / "tiny.bin"
+    src.write_bytes(b"0" * 10000)
+    page.click("#modeWindow")
+    page.set_input_files("#file", str(src))
+    page.wait_for_selector("body.playing", timeout=15000)
+    page.keyboard.press("Escape")
+
     page.click("#exportBtn")
     page.wait_for_selector("#status:has-text('已导出')", timeout=15000)
     page.click("#copyCmdBtn")

@@ -99,10 +99,10 @@ def test_export_frames_feature_present():
 
 
 def test_copy_receiver_command_feature_present():
-    """Story 6（issue #18）：一键复制接收端命令按钮 + 同源命令生成函数。
-
-    按钮命令随发送模式变化（desktop=全屏播放 / images=导出 PNG）；
-    frames.json 的 receiverCommand 与按钮同源，不残留硬编码字面量。
+    """Story 6（issue #18）+ issue #21/#22：一键复制接收端命令按钮 + 同源
+    命令生成函数。命令随发送模式（desktop/images）与播放模式（全屏/窗口）
+    联动：窗口播放带 `--region pick`；frames.json 的 receiverCommand 与
+    按钮同源，不残留硬编码字面量。
     """
     html = _html()
     assert 'id="copyCmdBtn"' in html, "缺少一键复制接收端命令按钮"
@@ -111,8 +111,19 @@ def test_copy_receiver_command_feature_present():
     # frames.json 的 receiverCommand 由生成函数产出（与按钮同源），非硬编码字符串
     assert re.search(r"receiverCommand:\s*buildReceiverCommand\(", html), \
         "frames.json receiverCommand 应由 buildReceiverCommand 生成，消除硬编码"
-    for flag in ("--source desktop", "--source images", "--dir frames_png", "--out output"):
+    for flag in ("--source desktop", "--region pick", "--source images",
+                 "--dir frames_png", "--out output"):
         assert flag in html, f"命令生成函数缺少 flag: {flag}"
+
+
+def test_playback_mode_first_class_present():
+    """issue #21：播放模式一等化——全屏/窗口显式切换按钮（不再「全屏优先、
+    失败降级」），窗口模式有专用停止按钮（点击画面不再停止）。"""
+    html = _html()
+    assert 'id="modeFullscreen"' in html and 'id="modeWindow"' in html, \
+        "缺少全屏/窗口播放模式切换按钮"
+    assert "playMode" in html, "缺少播放模式状态"
+    assert 'id="stopBtn"' in html, "缺少窗口播放停止按钮"
 
 
 def _receiver_receive_help_options() -> set:
@@ -127,11 +138,12 @@ def _receiver_receive_help_options() -> set:
 
 
 def test_receiver_command_flags_covered_by_cli_help():
-    """验收标准（issue #18）：命令在接收端可直接执行——buildReceiverCommand
-    用到的全部 flag 都被 `receive --help` 覆盖，CLI 契约变更即报警。"""
+    """验收标准（issue #18，issue #21 扩为三条）：命令在接收端可直接执行——
+    buildReceiverCommand 用到的全部 flag 都被 `receive --help` 覆盖，CLI
+    契约变更即报警。三条 = desktop 全屏 / desktop 窗口（--region pick）/ images。"""
     html = _html()
     cmds = re.findall(r"'(python -m receiver receive[^']*)'", html)
-    assert len(cmds) == 2, f"应有 desktop / images 两条接收端命令，实际 {cmds}"
+    assert len(cmds) == 3, f"应有 desktop 全屏 / desktop 窗口 / images 三条接收端命令，实际 {cmds}"
 
     flags = set()
     for c in cmds:
