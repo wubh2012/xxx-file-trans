@@ -1,14 +1,17 @@
 """识别流水线：几何自举（ADR-0001）→ 规范画布采样 → 帧头解析 → 交叉校验。
 
 无默认参数（docs/protocol.md §5 冻结）：BIT 由角标白块边长 ÷ 3 推得，
-COLS / ROWS 由四角标定出的数据网格矩形推得，PAD 由画布边沿到网格的
-距离推得；再与帧头 GEO / COLS / ROWS 交叉校验，不一致整帧丢弃。
+COLS / ROWS 由四角标定出的数据网格矩形推得（角标内角 = 数据网格外角，
+与画布外沿无关）；再与帧头 GEO / COLS / ROWS 交叉校验，不一致整帧丢弃。
+PAD 不再由画布边沿推导（issue #22）：角标只锚定数据网格，画布黑边在
+裁切采集下不可见，PAD 在几何上不可测——以帧头声明为准（CRC 保证帧头
+完整性），接收端由此容忍采集画面的任意裁切边距。
 
 发送端几何约定（sender.html 头注声明为实现基准，接收端据此自举）：
 静默区黑色宽 PAD×BIT；角标 = 白色实心方块、边长严格 3×BIT、内角与
 数据网格四角外角重合（对角线方向伸入静默区，故 PAD ≥ 3）；黑块 = 1。
-PAD 推导假设「画面即画布、静默区贴边」——发送端导出帧满足；采集类源
-（desktop #9 / camera #13）引入透视/裁切时在此扩展校正。
+早期版本 PAD 推导假设「画面即画布、静默区贴边」（ADR-0001 追记），
+现升级为裁切容忍；camera #13 的透视/裁切校正在此扩展。
 """
 
 from dataclasses import dataclass
@@ -55,7 +58,12 @@ class DecodedFrame:
 
 @dataclass
 class MeasuredGeometry:
-    """几何自举测量结果（全部来自画面，无默认值）。"""
+    """几何自举测量结果（bit/cols/rows/side 来自画面，无默认值）。
+
+    pad 为原始测量值（网格原点 ÷ BIT），仅在「画面即画布」时等于真实
+    PAD；裁切输入下它混入裁切偏移，仅供 calibrate 探针残差参考，
+    解码路径的 PAD 由帧头交叉校验裁定（见 decode_frame）。
+    """
 
     bit: int
     pad: int
@@ -146,16 +154,19 @@ def measure_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, 
         raise FrameRejected("geometry", f"数据网格尺寸简并: {gw}×{gh}")
     cols, rows = gw // bit, gh // bit
 
-    # PAD：画布边沿到网格距离（画面即画布，发送端导出帧无额外留白）；
-    # 整除性 / 四角一致性是冻结校验，交 bootstrap_geometry
+    # PAD 原始测量：网格原点 ÷ BIT（「画面即画布」时等于真实 PAD，裁切
+    # 输入下混入偏移仅供探针参考）；真实 PAD 由帧头交叉校验裁定（#22）
     return MeasuredGeometry(bit=bit, pad=x0 // bit, cols=cols, rows=rows, side=side), \
         (x0, y0, x1, y1)
 
 
 def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
-    """几何自举（ADR-0001）：测量 + 冻结校验（§5）。
+    """几何自举测量 + 测量层冻结校验（§5）。
 
-    返回 (测量几何, 网格矩形 x0/y0/x1/y1)。任一约束不满足抛 FrameRejected('geometry')。
+    返回 (测量几何, 网格矩形 x0/y0/x1/y1)。角标边长 / 网格尺寸的整除性
+    在此校验；原点对齐与 PAD 一致性校验随裁切容忍退役（issue #22）——
+    PAD 由帧头声明，几何上不可测。任一测量约束不满足抛
+    FrameRejected('geometry')。
     """
     geo, rect = measure_geometry(bw)
     x0, y0, x1, y1 = rect
@@ -165,8 +176,6 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
         raise FrameRejected("geometry", f"角标边长 {geo.side} 不能被 3 整除")
     if gw % bit != 0 or gh % bit != 0:
         raise FrameRejected("geometry", f"网格尺寸 {gw}×{gh} 不是 BIT={bit} 的整数倍")
-    if x0 % bit != 0 or y0 % bit != 0 or geo.pad != y0 // bit:
-        raise FrameRejected("geometry", f"静默区宽度不一致: x={x0} y={y0}")
     return geo, rect
 
 
@@ -188,7 +197,13 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
 
 
 def decode_frame(img: np.ndarray) -> DecodedFrame:
-    """一帧画面 → 解码结果。任一冻结校验不过抛 FrameRejected（整帧丢弃）。"""
+    """一帧画面 → 解码结果。任一冻结校验不过抛 FrameRejected（整帧丢弃）。
+
+    PAD 裁切容忍（issue #22）：网格矩形来自角标、与画布外沿无关，画面
+    可在任意偏移处被裁切采集（区域框选「框大一点」）。COLS / ROWS / BIT
+    照旧测量并交叉校验；PAD 几何上不可测（画布黑边不可见），以帧头
+    声明为准，CRC 保证帧头完整性。
+    """
     if img.ndim != 2:
         raise FrameRejected("geometry", "画面不是单通道灰度图")
     _, bw = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
@@ -200,7 +215,8 @@ def decode_frame(img: np.ndarray) -> DecodedFrame:
     header = grid_bytes[:HEADER_BYTES]
     h = parse_header(header)
 
-    # 与帧头交叉校验（§5）：测得几何 vs 帧头 GEO / COLS / ROWS
+    # 与帧头交叉校验（§5）：测得几何 vs 帧头 GEO / COLS / ROWS。
+    # PAD 不参与几何交叉校验（裁切下不可测，#22）；其完整性由 CRC 覆盖。
     mismatch = []
     if geo.cols != h.cols:
         mismatch.append(f"COLS 测得 {geo.cols} vs 帧头 {h.cols}")
@@ -208,8 +224,6 @@ def decode_frame(img: np.ndarray) -> DecodedFrame:
         mismatch.append(f"ROWS 测得 {geo.rows} vs 帧头 {h.rows}")
     if geo.bit != h.bit:
         mismatch.append(f"BIT 测得 {geo.bit} vs 帧头 {h.bit}")
-    if geo.pad != h.pad:
-        mismatch.append(f"PAD 测得 {geo.pad} vs 帧头 {h.pad}")
     if mismatch:
         raise FrameRejected("geometry", "；".join(mismatch))
     if (h.cols * h.rows) % 8 != 0:

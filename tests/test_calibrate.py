@@ -130,31 +130,33 @@ def test_rejection_breakdown_and_crc_rate(tmp_path):
     assert report["crcRate"] == report["crcPassed"] / report["crcReached"] < 1.0
 
 
-def test_1px_shift_small_bit_recommends_safer_bit(tmp_path):
-    """切片 4（ADR-0001 后果）：±1 像素角标偏移在小 BIT 时被放大——
-    BIT=4 流整体平移 +1px 后全部帧被几何校验拒绝，探针应实测出 1px 残差，
-    推荐参数识别出 BIT 不足并给出更安全值（采样窗口不越界判据 → BIT=7）。"""
+def test_1px_shift_small_bit_decodes_under_crop_tolerance(tmp_path):
+    """切片 4（issue #22 语义更新）：±1px 整体平移 = 合法裁切偏移。
+
+    旧「画面即画布」语义下，平移帧被原点校验（x0 % BIT）整帧拒绝，
+    小 BIT 还会反推更安全 BIT（ADR-0001 原判例）。裁切容忍后网格由
+    角标逐帧锚定、随画面一同平移，采样照常命中单元中心——BIT=4 的小
+    BIT 流完整解码，推荐参数维持实测值，不虚报。"""
     frames, paths = export_stream(
         tmp_path, os.urandom(500), filename="shift.bin", bit=4, pad=4,
     )
     for p in paths:
-        shift_png(p, dx=1, dy=0)  # 整幅 +1px：角标/网格对 BIT 栅格偏移 1px
+        shift_png(p, dx=1, dy=0)  # 整幅 +1px：整体平移 = 裁切偏移，画面自洽
 
     r = run_calibrate(frames)
 
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     report = last_json(r.stdout)
-    assert report["measuredBit"] == 4, "探针仍应测得真实 BIT（角标完好）"
-    assert report["residualPx"] == 1, "应实测出 ±1px 栅格残差"
-    assert report["decodeRate"] == 0.0, "平移帧应被冻结几何校验整帧拒绝"
-    assert report["BIT"] == 7, "小 BIT 不足应反推出最小安全 BIT=7"
-    assert report["BIT"] > report["measuredBit"]
-    assert "采集对齐" in r.stdout, "残差 ≥1px 时应警告偏差由冻结校验拒绝、与 BIT 无关"
+    assert report["decodeRate"] == 1.0, "整体平移=合法裁切偏移，不应整帧拒绝"
+    assert report["crcRate"] == 1.0
+    assert report["measuredBit"] == 4
+    assert report["residualPx"] == 0, "角标完好、画面自洽，无测量残差"
+    assert report["BIT"] == 4 and report["PAD"] == 4, "解码成立时不虚报推荐值"
 
 
-def test_1px_shift_large_bit_stays_recommended(tmp_path):
+def test_1px_shift_large_bit_decodes_under_crop_tolerance(tmp_path):
     """切片 5（切片 4 的对照）：同样的 ±1px 平移打在 BIT=8 上——采样窗口
-    判据已满足（8−5 ≥ 2），实测 BIT 足够安全，推荐参数不虚报、维持 8。"""
+    余量更大（8−5 ≥ 2），平移帧照常解码，推荐参数维持实测值 8。"""
     frames, paths = export_stream(
         tmp_path, os.urandom(500), filename="shift8.bin", bit=8, pad=4,
     )
@@ -165,9 +167,10 @@ def test_1px_shift_large_bit_stays_recommended(tmp_path):
 
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     report = last_json(r.stdout)
-    assert report["residualPx"] == 1
+    assert report["decodeRate"] == 1.0
+    assert report["residualPx"] == 0
     assert report["measuredBit"] == 8
-    assert report["BIT"] == 8, "BIT 足够吸收 ±1px 误差时不得虚报"
+    assert report["BIT"] == 8, "BIT 足够时不得虚报"
 
 
 def test_empty_source_reports_no_frames(tmp_path):

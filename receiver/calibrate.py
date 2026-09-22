@@ -8,11 +8,15 @@
   缺帧 / 元数据缺失不影响统计完成（区别于 receive 的退出码契约）。
 
 推荐参数（数据说话，依据 ADR-0001 后果 + pipeline._sample_grid 采样方式）：
-- BIT 由角标边长（3×BIT px）测量 ÷ 3 推得，±1 像素测量误差在小 BIT 时被放大；
-- 采样窗口 k = min(5, BIT)（取奇）置于单元中心，栅格原点偏差 δ px 时窗口
-  不越出本单元的条件是 BIT − k ≥ 2×δ；推荐 BIT = max(实测 BIT, 满足该式的
-  最小 BIT)，δ 取几何探针实测的残差最大绝对值（clean PNG 流 δ=0）；
-- 推荐 PAD = max(实测 PAD, 3)（角标 3×BIT 伸入静默区，PAD ≥ 3 冻结）。
+- BIT 由角标边长（3×BIT px）测量 ÷ 3 推得；采样窗口 k = min(5, BIT)（取奇）
+  置于单元中心，网格定位偏差 δ px 时窗口不越出本单元的条件是 BIT − k ≥ 2δ；
+  推荐 BIT = max(实测 BIT, 满足该式的最小 BIT)（采样鲁棒性下限）。
+- δ 取几何探针实测的残差最大绝对值。裁切容忍（issue #22）后网格由角标
+  逐帧锚定、随画面一同平移，栅格原点残差不可用（合法裁切偏移与测量误差
+  不可区分），角标候选又要求边长为 3 的整倍数——PNG 精确流 δ 恒为 0，
+  推荐即实测值；δ 通道保留给降质源（camera #13）的探针扩展。
+- PAD 以帧头声明为准（裁切下几何不可测，#22），推荐 = 实测帧头多数值
+  （钳到冻结下限 3）。
 - 输出末行 JSON：BIT / PAD 与 sender.html 输入项（id=bit / id=pad）同名，
   可直接回灌发送端。FPS 不在推荐之列：画面统计不出帧率依据，不虚报。
 """
@@ -88,38 +92,37 @@ class GeometrySample:
 
     bit: int
     pad: int
-    residual: int  # 栅格原点 / 角标边长相对 BIT 栅格的最大折算残差（px）
+    residual: int  # 角标边长相对 3×BIT 的最大折算残差（px；裁切容忍后原点残差不可用，#22）
 
 
 def probe_frame(img: np.ndarray) -> GeometrySample | None:
     """几何探针（#11）：绕过冻结校验直接测量，统计 ±1px 级测量误差（ADR-0001）。
 
     ±1px 偏差在 decode_frame 中表现为整帧拒绝，统计上只剩"拒了"而分不清
-    误差大小；探针取 measure_geometry 的原始测量值折算残差。测量不可能
-    （无角标候选等）返回 None。
+    误差大小；探针取 measure_geometry 的原始测量值折算残差。裁切容忍
+    （#22）后栅格原点残差不可用（合法裁切偏移与测量误差不可区分），仅
+    保留角标边长折算残差——角标候选要求边长为 3 的整倍数，PNG 精确流
+    恒为 0，通道保留给降质源（camera #13）探针。测量不可能（无角标候选
+    等）返回 None。
     """
     if img.ndim != 2:
         return None
     _, bw = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     try:
-        geo, rect = measure_geometry(bw)
+        geo, _rect = measure_geometry(bw)
     except FrameRejected:
         return None
-    residuals = [_fold(geo.side, 3)]
-    if geo.side % 3 == 0:
-        # 边长测量可信（3 的整倍数）时才统计栅格原点残差，否则 BIT 不可信
-        x0, y0, _, _ = rect
-        residuals += [_fold(x0, geo.bit), _fold(y0, geo.bit)]
     return GeometrySample(bit=int(geo.bit), pad=int(geo.pad),
-                          residual=int(max(abs(r) for r in residuals)))
+                          residual=int(abs(_fold(geo.side, 3))))
 
 
 def min_safe_bit(delta_px: int) -> int:
     """最小安全 BIT：采样窗口 k = min(5, BIT)（取奇）不越出本单元的条件
     BIT − k ≥ 2×δ 的最小解（上限 15 = 帧头 GEO 4 bit）。
 
-    δ=1（±1px 测量误差，ADR-0001 后果）→ BIT=7；clean 流 δ=0 → BIT=1
-    （即无误差证据时不虚报，维持实测值）。
+    δ=1（±1px 级网格定位偏差）→ BIT=7；δ=0（无误差证据）→ BIT=1
+    （不虚报，维持实测值）。裁切容忍后 PNG 精确流 δ 恒为 0（#22），
+    通道保留给降质源（camera #13）。
     """
     for bit in range(1, 16):
         k = min(5, bit)
@@ -169,19 +172,18 @@ def format_report(report: dict) -> str:
         f"（{report['crcPassed']}/{report['crcReached']}，进入 CRC 校验帧数）"
         if report["crcReached"] else "CRC 通过率：无帧进入 CRC 校验",
         f"实测几何：BIT={report['measuredBit']} PAD={report['measuredPad']}；"
-        f"栅格原点最大残差 {report['residualPx']} px"
+        f"角标最大折算残差 {report['residualPx']} px"
         if report["measuredBit"] else
         "实测几何：无有效测量样本（画面无角标结构）",
         f"推荐参数：BIT={report['BIT']} PAD={report['PAD']}",
     ]
     if report["residualPx"] >= 1:
-        # 推荐的作用边界（code-review #11）：±1px 级偏差当前由冻结几何校验
-        # （静默区宽度 / 网格整除性）整帧拒绝，与 BIT 无关；BIT 只决定
-        # 采样鲁棒性下限（ADR-0001），对齐问题须在采集端解决
+        # 推荐的作用边界（code-review #11）：±1px 级角标测量偏差会侵蚀采样
+        # 窗口，小 BIT 时易越界导致 CRC 拒帧；BIT 只决定采样鲁棒性下限
+        # （ADR-0001），画面损伤须在采集端解决
         lines.append(
-            f"警告：实测 ±{report['residualPx']}px 级几何偏差，该偏差由冻结几何"
-            "校验整帧拒绝（与 BIT 无关），建议改善采集对齐；"
-            "推荐 BIT 为采样鲁棒性下限（ADR-0001）"
+            f"警告：实测 ±{report['residualPx']}px 级角标测量偏差，小 BIT 时"
+            "采样窗口易越界（CRC 拒帧）；推荐 BIT 为采样鲁棒性下限（ADR-0001）"
         )
     return "\n".join(lines)
 
@@ -204,7 +206,7 @@ def run_calibration(frames) -> dict:
             tally_frame(stats, outcome)
             if isinstance(outcome, DecodedFrame):
                 decoded.append(outcome)
-                # 通过帧的几何已被冻结校验证明残差为 0，探针只测被拒帧
+                # 通过帧边长必为 3×BIT（冻结校验），残差记 0；探针只测被拒帧
                 samples.append(GeometrySample(bit=outcome.header.bit,
                                               pad=outcome.header.pad, residual=0))
             else:
