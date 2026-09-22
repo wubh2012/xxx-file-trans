@@ -6,7 +6,12 @@
        - 角标 = 白色实心方块，边长严格 = 3×BIT 像素，内角与数据网格四角
          外角重合、伸入静默区（对角线方向），因此要求 PAD ≥ 3；
        - 画布总尺寸 = (COLS + 2×PAD) × BIT 乘 (ROWS + 2×PAD) × BIT，
-         按屏幕自动反推 COLS/ROWS，整数倍缩放（1 方块 = BIT 像素，无插值）。 -->
+         按屏幕自动反推 COLS/ROWS，整数倍缩放（1 方块 = BIT 像素，无插值）；
+       - 全部几何按**物理像素**设计（issue #20）：屏幕尺寸与 BIT 输入均经
+         devicePixelRatio（OS 缩放 × 页面缩放）换算为物理值，帧头 BIT 声明
+         物理值——接收端抓屏测得物理像素与帧头天然一致，显示缩放 125%/150%
+         不再阻塞冻结校验；画布 CSS 显示尺寸 = 位图 ÷ dpr，1 位图 px = 1
+         物理 px，全屏播放不拉伸（宁有黑边）。 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -45,8 +50,14 @@
   }
   #exportBtn:disabled { opacity: .5; cursor: default; }
   canvas { display: block; image-rendering: pixelated; }  /* 非整数 DPR 下仍按最近邻放大，方块边缘不插值 */
-  /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景 */
+  canvas[hidden] { display: none; }  /* 作者样式会覆盖 [hidden] 的 UA display:none，须显式还原（否则停止播放后画布仍占位挤压 UI） */
+  /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景。
+     画布必须锚定画面左上角（不居中）：接收端几何自举按「画面即画布」
+     推 PAD（pad = 网格原点 ÷ BIT，见 receiver/pipeline.py），画布小于
+     屏幕时（非整除余量 / 黑边）居中会让网格原点带任意偏移，原点不再
+     是 PAD×BIT 的整数倍 → 整帧被拒。左上角锚定保证原点恒为 PAD×BIT。 */
   body.playing #ui { display: none; }
+  body.playing { justify-content: flex-start; align-items: flex-start; }
 </style>
 </head>
 <body>
@@ -54,7 +65,7 @@
   <h1>文件摆渡发送端</h1>
   <fieldset>
     <legend>发送参数</legend>
-    <label>BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
+    <label title="CSS 像素；实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值">BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
     <label>PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
     <label>FPS <input id="fps" type="number" min="1" max="30" value="5"></label>
   </fieldset>
@@ -101,16 +112,22 @@ const state = {
   mode: 'desktop',  // 当前发送模式：desktop=全屏播放 / images=导出 PNG（决定复制按钮的接收端命令）
 };
 
-/* ---------- 几何推导：按屏幕自动反推 COLS/ROWS ---------- */
+/* ---------- 几何推导：按屏幕自动反推 COLS/ROWS（物理像素口径，issue #20） ---------- */
 function deriveGeometry() {
+  // 一律按物理像素推导：devicePixelRatio = OS 缩放 × 页面缩放，一并覆盖
+  // 显示缩放（125%/150%）与页面缩放（Ctrl+-）两种场景。接收端（mss 抓屏）
+  // 看到的是物理像素，帧头 BIT 声明物理值才能通过冻结校验（协议 §5）
+  const dpr = window.devicePixelRatio || 1;
   // 取窗口与屏幕的较小者：全屏成功时两者相等；全屏被拒时按当前窗口反推，
   // 保证画布完整可见、四角角标不被裁掉（接收端几何自举依赖角标）
-  const W = Math.min(screen.width, innerWidth), H = Math.min(screen.height, innerHeight);
+  const W = Math.round(Math.min(screen.width, innerWidth) * dpr);
+  const H = Math.round(Math.min(screen.height, innerHeight) * dpr);
   const pad = clampInt(el('pad').value, 3, 15);   // PAD < 3 放不下 3×BIT 角标
-  let bit = clampInt(el('bit').value, 1, 15);
+  // BIT 输入为 CSS px/块，换算为物理像素并取整（整数 BIT 是 ADR-0001 测量模型前提）
+  let bit = Math.max(1, Math.round(clampInt(el('bit').value, 1, 15) * dpr));
   // BIT 过小会使 COLS/ROWS 超出帧头 1 字节上限，自动抬升（UI 回显实际生效值）
   bit = Math.max(bit, Math.ceil(W / (255 + 2 * pad)), Math.ceil(H / (255 + 2 * pad)));
-  if (bit > 15) throw new Error('屏幕分辨率过高，BIT 超出 15 上限，无法编码');
+  if (bit > 15) throw new Error('屏幕物理分辨率过高或显示缩放过大，物理 BIT 超出 15 上限（4 bit 帧头），无法编码');
   let cols = Math.floor(W / bit) - 2 * pad;
   let rows = Math.floor(H / bit) - 2 * pad;
   while (rows > 0 && (cols * rows) % 8 !== 0) rows--;   // (COLS×ROWS) mod 8 == 0 冻结约束
@@ -216,6 +233,11 @@ function setupCanvas() {
   const { BIT, PAD, COLS, ROWS } = state.geo;
   stage.width = (COLS + 2 * PAD) * BIT;
   stage.height = (ROWS + 2 * PAD) * BIT;
+  // CSS 显示尺寸 = 位图 ÷ dpr：1 位图 px = 1 物理 px，全屏播放不拉伸
+  //（像素级 1:1 优先，画布不满屏时余下为与静默区同色的黑边）
+  const dpr = window.devicePixelRatio || 1;
+  stage.style.width = (stage.width / dpr) + 'px';
+  stage.style.height = (stage.height / dpr) + 'px';
   gridCanvas.width = COLS; gridCanvas.height = ROWS;
   frameImage = gridCtx.createImageData(COLS, ROWS);
 }
@@ -501,7 +523,7 @@ function updateInfo() {
     ['fileId（内容 CRC32）', '0x' + state.fileId.toString(16).toUpperCase().padStart(8, '0')],
     ['文件名', escapeHtml(state.fileName)],
     ['原始 / 压缩大小', `${state.plainSize} / ${state.compSize} 字节`],
-    ['BIT / PAD / FPS', `${g.BIT} px / ${g.PAD}×BIT / ${g.FPS}`],
+    ['BIT / PAD / FPS', `${g.BIT} px（物理）/ ${g.PAD}×BIT / ${g.FPS}`],
     ['COLS × ROWS', `${g.COLS} × ${g.ROWS}`],
     ['chunkSize', `${g.chunkSize} 字节/帧`],
     ['总帧数', `${state.totalFrames}（每轮约 ${(state.totalFrames / g.FPS).toFixed(1)} 秒）`],

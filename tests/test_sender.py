@@ -53,6 +53,15 @@ def test_crc_self_check_vector_embedded():
     assert re.search(r"0xCBF43926", html, re.IGNORECASE), "缺少自检向量期望值 0xCBF43926"
 
 
+def test_physical_pixel_canvas_present():
+    """issue #20：画布按物理像素设计——devicePixelRatio 换算几何推导，
+    CSS 显示尺寸 = 位图 ÷ dpr（1 位图 px = 1 物理 px，全屏播放不拉伸），
+    显示缩放 125%/150% 下接收端测得物理像素与帧头 BIT 天然一致。"""
+    html = _html()
+    assert "devicePixelRatio" in html, "缺少 devicePixelRatio 物理像素换算"
+    assert "stage.style.width" in html, "缺少 CSS 显示尺寸设置（位图 ÷ dpr，防拉伸）"
+
+
 def test_metadata_frame_building_present():
     """元数据帧构造必须存在且符合冻结布局（docs/protocol.md §4，issue #6）。
 
