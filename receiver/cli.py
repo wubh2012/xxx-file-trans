@@ -4,7 +4,6 @@
 """
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -15,16 +14,12 @@ from receiver import paths
 from receiver.calibrate import format_report, run_calibration
 from receiver.notify import default_notifier
 from receiver.pick import pick_region
-from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
-from receiver.progress import ProgressReporter
 from receiver.protocol import startup_self_check
-from receiver.restore import RestoreError, gunzip_verify
-from receiver.sanitize import safe_dest, sanitize_filename
+from receiver.run import run_receive
 from receiver.sources import iter_source
 from receiver.sources.desktop import format_region, iter_desktop, parse_region
 from receiver.sources.video import iter_video
-from receiver.store import FrameStore, IncompleteError
-from receiver.summary import RestoreTimer, friendly_size, incomplete_summary, restore_summary
+from receiver.summary import restore_summary
 
 # 摘要行 / 未完成统计的打印出口（issue #25）：rich 高亮，非 tty 自动
 # 降级为普通文本；soft_wrap 防长文件名折行拆散断言口径
@@ -32,118 +27,37 @@ _console = Console()
 _err_console = Console(stderr=True)
 
 
-def _warn_incomplete(timer: RestoreTimer, store: FrameStore) -> None:
-    """失败 / 中断路径的未完成统计（issue #25）：暗色警告样式，始终输出
-    （无帧落地时已耗时 0.0 s、已收 0/? 帧，口径统一不打折）。"""
-    _err_console.print(
-        incomplete_summary(timer.elapsed, store.received_count(), store.total_frames),
-        style="yellow dim", markup=False, highlight=False, soft_wrap=True,
-    )
-
-
 class PickCancelled(Exception):
     """--region pick 用户取消（Esc / 关闭覆盖窗）：明确中止，不回退整屏（issue #22）。"""
 
 
 def receive_frames(args, frames, notify=None) -> int:
-    """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器（spec「模块划分」）。
+    """接收主循环 CLI 壳（issue #26 重构）：核心逻辑在 receiver.run.run_receive
+    （与 tkinter GUI 共用），本壳只按 ReceiveResult 字段渲染 CLI 文本，
+    输出契约（issue #25 摘要口径）不变。
 
     notify 为可注入的完成通知边界（issue #12）：还原成功后以
     notify(title, message) 报喜，失败路径不调用；None 时不通知
     （真实默认实现见 receiver.notify）。"""
-    # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
-    # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
-    store = FrameStore(paths.PROGRESS_DIR)
-    timer = RestoreTimer()  # 还原计时（issue #25）：锚点 = 首个 is_new 数据帧落地
-
-    def fail(msg: str) -> int:
-        """统一失败出口：报错 + 未完成统计（issue #25），退出码 1。"""
-        print(msg, file=sys.stderr)
-        _warn_incomplete(timer, store)
-        return 1
-
-    try:
-        # 实时进度（需求 F15）：帧数 / 百分比 / KB/s / 识别率 / 丢帧，
-        # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
-        with ProgressReporter() as reporter:
-            try:
-                for name, img in frames:
-                    try:
-                        frame: DecodedFrame = decode_frame(img)
-                    except FrameRejected as e:
-                        reporter.on_rejected(name, e)
-                        continue
-                    try:
-                        is_new = store.add(frame)
-                    except FrameRejected as e:
-                        # 跨任务混帧 / 参数锁定硬锁（param_lock）同样整帧拒绝
-                        reporter.on_rejected(name, e)
-                        continue
-                    if is_new:
-                        timer.start()  # 与参数锁定同点起算，首帧前时间不计入
-                    reporter.on_decoded(frame.payload, is_new)
-                    if store.total_frames is not None:
-                        reporter.set_total(store.total_frames,
-                                           completed=store.received_count())
-                    if store.is_complete():
-                        # 收齐判据满足即提前退出进入还原（F13/验收标准 2，
-                        # issue #19）：desktop 等无限源不等流耗尽；有限源
-                        # 本就靠耗尽退出，行为不变。元数据缺失时永不
-                        # complete，照常继续收帧（验收标准 8 语义不变）。
-                        break
-            except KeyboardInterrupt:
-                return fail("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧")
-            reporter.finish()
-    finally:
-        store.close()
-
-    if store.is_complete():
-        try:
-            plain = gunzip_verify(store.assemble())
-        except (IncompleteError, RestoreError) as e:
-            return fail(f"还原失败：{e}")
-        if len(plain) != store.metadata.plain_size:
-            return fail(
-                f"还原失败：plainSize 不一致（元数据声明 {store.metadata.plain_size}，"
-                f"实际解压 {len(plain)}）"
-            )
-        out_dir = Path(args.out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            dest = safe_dest(out_dir, sanitize_filename(store.metadata.name))
-        except ValueError as e:
-            return fail(f"还原失败：{e}")
-        dest.write_bytes(plain)
-        elapsed = timer.elapsed  # 耗时口径到写盘完成止（sha256 不计入）
+    result = run_receive(frames, Path(args.out), notify=notify)
+    if result.error:
+        print(result.error, file=sys.stderr)
+    if result.incomplete:
+        _err_console.print(
+            result.incomplete,
+            style="yellow dim", markup=False, highlight=False, soft_wrap=True,
+        )
+    if result.code == 0 and result.dest is not None:
         # 还原统计摘要（issue #25）：单行 rich 高亮，友好大小 / 耗时 /
-        # 明文口径速率 / 帧 N/M / sha256，替换旧「N 字节」行；
-        # 与进度条压缩口径 KB/s 并存不混用
+        # 明文口径速率 / 帧 N/M / sha256；与进度条压缩口径 KB/s 并存不混用
         _console.print(
-            restore_summary(dest.name, len(plain), elapsed,
-                            store.received_count(), store.total_frames,
-                            hashlib.sha256(plain).hexdigest()),
+            restore_summary(result.name, result.plain_size, result.elapsed,
+                            result.received, result.total, result.sha256),
             style="bold green", markup=False, highlight=False, soft_wrap=True,
         )
-        # payload 清理（issue #12）：还原成功后任务目录不再有续传价值，删除残留；
-        # 失败仅告警，不推翻已成功的还原
-        try:
-            store.cleanup_task()
-        except OSError as e:
-            print(f"告警：任务 payload 清理失败（{e}），可手动删除任务目录", file=sys.stderr)
-        # 完成通知（issue #12）：同理，通知发送失败只告警；文本用友好
-        # 大小（issue #25），不再出现裸字节数
-        if notify is not None:
-            try:
-                notify("文件摆渡还原完成", f"{dest.name}（{friendly_size(len(plain))}）已还原到 {dest.parent}")
-            except Exception as e:
-                print(f"告警：完成通知发送失败（{e}）", file=sys.stderr)
-        return 0
-
-    if store.data_complete():
-        # §4：元数据帧是落盘文件名与还原截断长度的唯一来源，缺失不启动还原
-        return fail("元数据缺失：数据帧照常收下，不启动还原")
-
-    return fail("未收齐全部数据帧，不启动还原")
+    for warning in result.warnings:
+        print(warning, file=sys.stderr)
+    return result.code
 
 
 def calibrate_frames(args, frames) -> int:
