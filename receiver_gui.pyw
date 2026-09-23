@@ -13,6 +13,19 @@ tkinter 薄壳：状态、校验、文案、线程编排都在 receiver.gui_core
 
 import queue
 import time
+import os
+import sys
+from pathlib import Path
+
+# 双击引导（issue #26）：双击 .pyw 时 Windows 用注册的解释器启动，未必是
+# 仓库 venv——而 cv2 / rich / mss 等依赖都装在 .venv/ 里，系统解释器在
+# 下方 import receiver.* 即失败且 pythonw 无控制台看不到报错。故先于一切
+# receiver 导入检查：存在仓库 venv pythonw 且当前进程不是它时，转手重启。
+_venv_pythonw = Path(__file__).resolve().parent / ".venv" / "Scripts" / "pythonw.exe"
+if _venv_pythonw.is_file() and Path(sys.executable).resolve() != _venv_pythonw.resolve():
+    import subprocess
+    subprocess.Popen([str(_venv_pythonw), str(Path(__file__).resolve())], close_fds=True)
+    sys.exit(0)
 
 from receiver.gui_core import (GUI_SOURCES, SOURCE_LABELS, ProgressModel,
                                ReceiveJob, build_command, make_frames,
