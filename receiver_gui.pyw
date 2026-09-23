@@ -205,6 +205,11 @@ class ReceiverGui:
         self.root.withdraw()
         try:
             region = pick_region()
+        except tk.TclError as e:
+            # pythonw 无控制台，Tk 回调异常默认无声吞掉——显式弹出，
+            # 框选故障（如 Tk 解释器/显示问题）不静默
+            messagebox.showerror("框选失败", str(e), parent=self.root)
+            region = None
         finally:
             self.root.deiconify()
         if region is not None:  # 取消（Esc）不动已填值

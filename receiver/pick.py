@@ -69,7 +69,10 @@ def pick_region() -> dict | None:
 
     canvas = tk.Canvas(root, highlightthickness=0, cursor="crosshair")
     canvas.pack(fill="both", expand=True)
-    snapshot = tk.PhotoImage(data=ppm)  # 1:1 显示，无缩放（引用须保活）
+    # master=canvas 必须显式指定：本模块可能被 GUI 进程调用（receiver_gui，
+    # issue #26），彼时默认根已是主窗口的另一个 Tk 解释器，快照 PhotoImage
+    # 不指定 master 会挂错解释器，create_image 抛 TclError → 覆盖窗白屏
+    snapshot = tk.PhotoImage(master=canvas, data=ppm)  # 1:1 显示，无缩放（引用须保活）
     canvas.create_image(0, 0, image=snapshot, anchor="nw")
     hint = canvas.create_text(12, 10, anchor="nw", fill="yellow", font=("system-ui", 14),
                               text="拖框选择采集区域（允许留边）→ Enter 确认 / Esc 取消；重新拖拽替换")
