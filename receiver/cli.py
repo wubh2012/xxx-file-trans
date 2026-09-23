@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+from rich.console import Console
+
 from receiver import paths
 from receiver.calibrate import format_report, run_calibration
 from receiver.notify import default_notifier
@@ -22,6 +24,21 @@ from receiver.sources import iter_source
 from receiver.sources.desktop import format_region, iter_desktop, parse_region
 from receiver.sources.video import iter_video
 from receiver.store import FrameStore, IncompleteError
+from receiver.summary import RestoreTimer, friendly_size, incomplete_summary, restore_summary
+
+# 摘要行 / 未完成统计的打印出口（issue #25）：rich 高亮，非 tty 自动
+# 降级为普通文本；soft_wrap 防长文件名折行拆散断言口径
+_console = Console()
+_err_console = Console(stderr=True)
+
+
+def _warn_incomplete(timer: RestoreTimer, store: FrameStore) -> None:
+    """失败 / 中断路径的未完成统计（issue #25）：暗色警告样式，始终输出
+    （无帧落地时已耗时 0.0 s、已收 0/? 帧，口径统一不打折）。"""
+    _err_console.print(
+        incomplete_summary(timer.elapsed, store.received_count(), store.total_frames),
+        style="yellow dim", markup=False, highlight=False, soft_wrap=True,
+    )
 
 
 class PickCancelled(Exception):
@@ -37,6 +54,14 @@ def receive_frames(args, frames, notify=None) -> int:
     # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
+    timer = RestoreTimer()  # 还原计时（issue #25）：锚点 = 首个 is_new 数据帧落地
+
+    def fail(msg: str) -> int:
+        """统一失败出口：报错 + 未完成统计（issue #25），退出码 1。"""
+        print(msg, file=sys.stderr)
+        _warn_incomplete(timer, store)
+        return 1
+
     try:
         # 实时进度（需求 F15）：帧数 / 百分比 / KB/s / 识别率 / 丢帧，
         # CRC 连续失败告警限流；逐帧丢弃打印与收帧汇总均由 reporter 接管
@@ -54,6 +79,8 @@ def receive_frames(args, frames, notify=None) -> int:
                         # 跨任务混帧 / 参数锁定硬锁（param_lock）同样整帧拒绝
                         reporter.on_rejected(name, e)
                         continue
+                    if is_new:
+                        timer.start()  # 与参数锁定同点起算，首帧前时间不计入
                     reporter.on_decoded(frame.payload, is_new)
                     if store.total_frames is not None:
                         reporter.set_total(store.total_frames,
@@ -65,9 +92,7 @@ def receive_frames(args, frames, notify=None) -> int:
                         # complete，照常继续收帧（验收标准 8 语义不变）。
                         break
             except KeyboardInterrupt:
-                print("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧",
-                      file=sys.stderr)
-                return 1
+                return fail("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧")
             reporter.finish()
     finally:
         store.close()
@@ -76,45 +101,49 @@ def receive_frames(args, frames, notify=None) -> int:
         try:
             plain = gunzip_verify(store.assemble())
         except (IncompleteError, RestoreError) as e:
-            print(f"还原失败：{e}", file=sys.stderr)
-            return 1
+            return fail(f"还原失败：{e}")
         if len(plain) != store.metadata.plain_size:
-            print(
+            return fail(
                 f"还原失败：plainSize 不一致（元数据声明 {store.metadata.plain_size}，"
-                f"实际解压 {len(plain)}）",
-                file=sys.stderr,
+                f"实际解压 {len(plain)}）"
             )
-            return 1
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
             dest = safe_dest(out_dir, sanitize_filename(store.metadata.name))
         except ValueError as e:
-            print(f"还原失败：{e}", file=sys.stderr)
-            return 1
+            return fail(f"还原失败：{e}")
         dest.write_bytes(plain)
-        print(f"还原完成：{dest}（{len(plain)} 字节，sha256 {hashlib.sha256(plain).hexdigest()[:16]}…）")
+        elapsed = timer.elapsed  # 耗时口径到写盘完成止（sha256 不计入）
+        # 还原统计摘要（issue #25）：单行 rich 高亮，友好大小 / 耗时 /
+        # 明文口径速率 / 帧 N/M / sha256，替换旧「N 字节」行；
+        # 与进度条压缩口径 KB/s 并存不混用
+        _console.print(
+            restore_summary(dest.name, len(plain), elapsed,
+                            store.received_count(), store.total_frames,
+                            hashlib.sha256(plain).hexdigest()),
+            style="bold green", markup=False, highlight=False, soft_wrap=True,
+        )
         # payload 清理（issue #12）：还原成功后任务目录不再有续传价值，删除残留；
         # 失败仅告警，不推翻已成功的还原
         try:
             store.cleanup_task()
         except OSError as e:
             print(f"告警：任务 payload 清理失败（{e}），可手动删除任务目录", file=sys.stderr)
-        # 完成通知（issue #12）：同理，通知发送失败只告警
+        # 完成通知（issue #12）：同理，通知发送失败只告警；文本用友好
+        # 大小（issue #25），不再出现裸字节数
         if notify is not None:
             try:
-                notify("文件摆渡还原完成", f"{dest.name}（{len(plain)} 字节）已还原到 {dest.parent}")
+                notify("文件摆渡还原完成", f"{dest.name}（{friendly_size(len(plain))}）已还原到 {dest.parent}")
             except Exception as e:
                 print(f"告警：完成通知发送失败（{e}）", file=sys.stderr)
         return 0
 
     if store.data_complete():
         # §4：元数据帧是落盘文件名与还原截断长度的唯一来源，缺失不启动还原
-        print("元数据缺失：数据帧照常收下，不启动还原", file=sys.stderr)
-        return 1
+        return fail("元数据缺失：数据帧照常收下，不启动还原")
 
-    print("未收齐全部数据帧，不启动还原", file=sys.stderr)
-    return 1
+    return fail("未收齐全部数据帧，不启动还原")
 
 
 def calibrate_frames(args, frames) -> int:

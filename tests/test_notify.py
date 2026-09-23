@@ -109,7 +109,8 @@ def progress_root(tmp_path, monkeypatch):
 
 class TestNotifyOnRestore:
     def test_notify_called_on_successful_restore(self, tmp_path, progress_root):
-        """还原成功 → 注入的通知边界被调用，消息含落盘文件名与字节数。"""
+        """还原成功 → 注入的通知边界被调用，消息含落盘文件名与友好大小
+        （issue #25：通知文本不再出现裸字节数）。"""
         src = os.urandom(2000)
         frames_dir = tmp_path / "frames"
         export_ok(src, frames_dir, "done.bin")
@@ -121,7 +122,9 @@ class TestNotifyOnRestore:
         assert len(notifier.calls) == 1, f"成功应恰好通知一次：{notifier.calls}"
         title, message = notifier.calls[0]
         assert "done.bin" in message
-        assert str(len(src)) in message
+        assert "2.0 KiB" in message, f"通知应使用友好大小：{message}"
+        assert "字节" not in message and str(len(src)) not in message, \
+            f"通知不得出现裸字节数：{message}"
 
     def test_notify_not_called_on_incomplete(self, tmp_path, progress_root):
         """未收齐不还原 → 通知边界不得被调用（失败不报喜）。"""
