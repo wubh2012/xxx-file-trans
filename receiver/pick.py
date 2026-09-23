@@ -74,15 +74,25 @@ def pick_region() -> dict | None:
     # 不指定 master 会挂错解释器，create_image 抛 TclError → 覆盖窗白屏
     snapshot = tk.PhotoImage(master=canvas, data=ppm)  # 1:1 显示，无缩放（引用须保活）
     canvas.create_image(0, 0, image=snapshot, anchor="nw")
-    hint = canvas.create_text(12, 10, anchor="nw", fill="yellow", font=("system-ui", 14),
-                              text="拖框选择采集区域（允许留边）→ Enter 确认 / Esc 取消；重新拖拽替换")
 
     drag = {"start": None, "rect": None, "moved": False, "region": None}
+    hint = {"id": None}
+
+    def show_hint(text):
+        """提示行：拖拽中让位视线，松手即恢复——「按回车确认」的提示不可缺席。"""
+        if hint["id"] is not None:
+            canvas.delete(hint["id"])
+        hint["id"] = canvas.create_text(12, 10, anchor="nw", fill="yellow",
+                                        font=("system-ui", 14), text=text)
+
+    show_hint("拖框选择采集区域（允许留边）→ Enter 确认 / Esc 取消；重新拖拽替换")
 
     def on_press(event):
         drag["start"] = (event.x, event.y)
         drag["moved"] = False
-        canvas.delete(hint)  # 首次按下即让位，框选视线不被提示遮挡
+        if hint["id"] is not None:  # 拖拽中让位，框选视线不被提示遮挡
+            canvas.delete(hint["id"])
+            hint["id"] = None
         if drag["rect"] is not None:  # 再次拖拽替换：旧橡皮筋一并清掉
             canvas.delete(drag["rect"])
             drag["rect"] = None
@@ -100,6 +110,9 @@ def pick_region() -> dict | None:
         if drag["moved"]:
             drag["region"] = region_from_drag(*drag["start"], _event.x, _event.y,
                                               vs_left, vs_top)
+        # 已框选 → 督促回车确认；未框选（零位移单击）→ 完整指引
+        show_hint("Enter 确认 / Esc 取消；重新拖拽替换" if drag["region"] is not None
+                  else "拖框选择采集区域（允许留边）→ Enter 确认 / Esc 取消")
 
     def confirm(_event=None):
         if drag["region"] is not None:
@@ -115,5 +128,9 @@ def pick_region() -> dict | None:
     root.bind("<Return>", confirm)
     root.bind("<Escape>", cancel)
     root.protocol("WM_DELETE_WINDOW", cancel)  # 无装饰几乎不可达，保险
-    root.mainloop()
+    # wait_window 而非 mainloop（issue #26）：进程内只允许一个 mainloop，
+    # GUI 宿主嵌套第二个 mainloop 后，确认销毁即卡死外层事件循环（界面
+    # 假死）；wait_window（tkwait window）自带局部事件处理，CLI 无 mainloop
+    # 与 GUI 嵌套两种宿主均正确
+    root.wait_window(root)
     return drag["region"]
