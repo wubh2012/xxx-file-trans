@@ -20,9 +20,12 @@ from pathlib import Path
 # 双击引导（issue #26）：双击 .pyw 时 Windows 用注册的解释器启动，未必是
 # 仓库 venv——而 cv2 / rich / mss 等依赖都装在 .venv/ 里，系统解释器在
 # 下方 import receiver.* 即失败且 pythonw 无控制台看不到报错。故先于一切
-# receiver 导入检查：存在仓库 venv pythonw 且当前进程不是它时，转手重启。
-_venv_pythonw = Path(__file__).resolve().parent / ".venv" / "Scripts" / "pythonw.exe"
-if _venv_pythonw.is_file() and Path(sys.executable).resolve() != _venv_pythonw.resolve():
+# receiver 导入检查：存在仓库 venv 且当前解释器不在其 Scripts 目录
+# （python.exe / pythonw.exe 都算已在 venv 内，测试经 python.exe 直跑不转手）
+# 时，转手用 venv pythonw 重启。
+_venv_scripts = Path(__file__).resolve().parent / ".venv" / "Scripts"
+_venv_pythonw = _venv_scripts / "pythonw.exe"
+if _venv_pythonw.is_file() and Path(sys.executable).resolve().parent != _venv_scripts.resolve():
     import subprocess
     subprocess.Popen([str(_venv_pythonw), str(Path(__file__).resolve())], close_fds=True)
     sys.exit(0)
