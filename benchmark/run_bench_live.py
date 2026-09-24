@@ -225,12 +225,18 @@ def frames_with_deadline(gen, deadline: float):
 def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
                    backend: str = "mss") -> None:
     """接收线程主体：结果与拒帧计数写入 box（线程内启动采集，随循环播放
-    收齐后自然结束；file_id 每轮唯一，滞留不串轮）。"""
+    收齐后自然结束；file_id 每轮唯一，滞留不串轮）。
+
+    采集生成器句柄存入 box["capture_gen"]：主线程 join 超时后 close()，
+    向生成器注入 GeneratorExit → _dxgi_capture 的 finally 释放相机——
+    dxcam 相机按 (device, output, backend) 单例注册，滞留线程不放手会
+    占住单例，后续自检/下一轮 create 拿到别人的活相机（2026-09-24 实测）。"""
     rep = LiveReporter()
     box["reporter"] = rep
+    gen = iter_desktop(region=region, backend=backend)
+    box["capture_gen"] = gen
     t0 = time.perf_counter()
-    result = run_receive(iter_desktop(region=region, backend=backend), out_dir,
-                         reporter_factory=lambda: rep, notify=None)
+    result = run_receive(gen, out_dir, reporter_factory=lambda: rep, notify=None)
     box["result"] = result
     box["worker_s"] = time.perf_counter() - t0
 
@@ -295,21 +301,48 @@ def main() -> int:
     results_json = RESULTS_DIR / f"live_desktop_results{suffix}.json"
     results_csv = RESULTS_DIR / f"live_desktop_results{suffix}.csv"
 
-    from playwright.sync_api import sync_playwright
-
     # 进度目录重定向（run_receive 内 paths.PROGRESS_DIR 运行时查属性，可猴补）
     paths.PROGRESS_DIR = WORK_DIR / "progress"
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     sender_uri = (ROOT / "sender.html").as_uri()
-    runs, calibs = [], []
-    payload_a = WORK_DIR / "live_payload_a.bin"
-    payload_b = WORK_DIR / "live_payload_b.bin"
-    payload_toggle = 0
 
     win_x, win_y, win_w, win_h = window_rect_dip()
     print(f"播放窗口 DIP {win_w}x{win_h} @({win_x},{win_y})（工作区钳制，防任务栏遮挡角标）",
           flush=True)
+    keep_awake = _keep_display_awake()  # 长跑期间显示器休眠 = 发送停摆 + 采集死亡
+    try:
+        return _run_bench(args, capture, results_json, results_csv, sender_uri,
+                          win_x, win_y, win_w, win_h)
+    finally:
+        keep_awake()
+
+
+def _keep_display_awake() -> "Callable[[], None]":
+    """SetThreadExecutionState(ES_CONTINUOUS|ES_DISPLAY_REQUIRED)：阻止
+    显示器休眠/屏保（2026-09-24 实测：~15 分钟空闲触发熄屏 → ACCESS_LOST
+    + 发送端 rAF 停摆，接收轮 6 轮超时失败）。返回恢复函数。"""
+    if sys.platform != "win32":
+        return lambda: None
+    import ctypes
+
+    ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED = 0x80000000, 1, 1
+    flags = ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
+    ctypes.windll.kernel32.SetThreadExecutionState(flags)
+
+    def restore():
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+    return restore
+
+
+def _run_bench(args, capture, results_json, results_csv, sender_uri,
+               win_x, win_y, win_w, win_h) -> int:
+    runs, calibs = [], []
+    payload_a = WORK_DIR / "live_payload_a.bin"
+    payload_b = WORK_DIR / "live_payload_b.bin"
+    payload_toggle = 0
+    from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
@@ -396,6 +429,17 @@ def main() -> int:
                 page.bring_to_front()
                 th.join(timeout=timeout_s)
                 wall = time.perf_counter() - t0
+                if th.is_alive() and "capture_gen" in box:
+                    # 超时滞留：close 采集生成器（释放 dxgi 相机单例），
+                    # 线程随后自行收尾；不清理会占住单例坑死后续轮次
+                    try:
+                        box["capture_gen"].close()
+                    except ValueError:
+                        # 生成器正在执行（线程阻塞在 next 上）无法注入
+                        # GeneratorExit：仅等待其自然产出后随线程退出
+                        print("  [warn] 采集生成器执行中无法 close，仅等待线程",
+                              flush=True)
+                    th.join(timeout=10)
 
                 if "result" in box:
                     result = box["result"]

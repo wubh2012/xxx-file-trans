@@ -127,18 +127,33 @@ def test_generator_close_releases_camera(fake_dxcam):
     assert fake.camera is not None and fake.camera.released
 
 
-def test_grab_exception_rebuilds_camera(fake_dxcam, monkeypatch):
-    """grab 抛异常（系统过渡 ACCESS_LOST）→ 释放并重建相机后继续采集，
-    恢复期重发上一帧（单次过渡不终止接收，issue #31）。"""
+def test_grab_exception_retry_then_rebuild(fake_dxcam, monkeypatch):
+    """grab 抛异常（系统过渡 ACCESS_LOST）→ 先重试 4 拍（重发上一帧），
+    连续 5 次失败才释放并重建相机；恢复期继续重发上一帧——单次过渡
+    不终止接收（issue #31）。"""
     monkeypatch.setattr("receiver.sources.desktop.time.sleep", lambda _s: None)
     a = np.full((8, 8, 1), 10, dtype=np.uint8)
-    fake = fake_dxcam([_gray3d(a), DXGI_LOST], rebuild_script=[])
+    fake = fake_dxcam([_gray3d(a)] + [DXGI_LOST] * 5, rebuild_script=[])
     gen = _dxgi_capture(None)
-    out = [next(gen), next(gen), next(gen)]
+    out = [next(gen) for _ in range(6)]
     gen.close()
-    assert out[0].shape == (8, 8)          # 异常前的更新帧
-    assert np.array_equal(out[1], out[2])  # 恢复期重发上一帧
-    assert fake.create_count >= 2          # 相机被重建
+    assert all(np.array_equal(o, a[:, :, 0]) for o in out)  # 重试/恢复期全为重发
+    assert fake.create_count == 2           # 相机被重建一次
+
+
+def test_grab_transient_exception_no_rebuild(fake_dxcam, monkeypatch):
+    """零星 grab 异常（≤4 次）在 dxcam 自带恢复内消化，不重建相机。"""
+    monkeypatch.setattr("receiver.sources.desktop.time.sleep", lambda _s: None)
+    a = np.full((8, 8, 1), 10, dtype=np.uint8)
+    b = np.full((8, 8, 1), 240, dtype=np.uint8)
+    fake = fake_dxcam([_gray3d(a), DXGI_LOST, DXGI_LOST, _gray3d(b)])
+    gen = _dxgi_capture(None)
+    out = [next(gen), next(gen), next(gen), next(gen)]
+    gen.close()
+    assert np.array_equal(out[0], a[:, :, 0])
+    assert np.array_equal(out[1], out[2])   # 异常拍重发上一帧
+    assert np.array_equal(out[3], b[:, :, 0])  # 恢复后新帧
+    assert fake.create_count == 1           # 相机未被重建
 
 
 def test_create_exception_retries(fake_dxcam, monkeypatch):
@@ -175,7 +190,20 @@ def test_iter_desktop_dxgi_backend_end_to_end(tmp_path, fake_dxcam):
     for p in paths:  # 每个传输帧：新画面 + 一次静屏重复（两帧一致判定所需）
         img = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
         script += [_gray3d(img), None]
-    fake_dxcam(script)
+    fake = fake_dxcam(script)
     # 真实 dxgi 采集是无限流（脚本耗尽后假相机持续静屏重发），按放行数截取
-    names = [name for name, _ in islice(iter_desktop(backend="dxgi"), len(paths))]
+    gen = iter_desktop(backend="dxgi")
+    names = [name for name, _ in islice(gen, len(paths))]
+    gen.close()
     assert names == [f"desktop-{i:06d}" for i in range(1, len(paths) + 1)]
+    assert fake.camera is not None and fake.camera.released  # 关闭释放采集资源
+
+
+def test_iter_desktop_close_releases_camera(fake_dxcam):
+    """iter_desktop 关闭 → 内层 dxgi 采集生成器被显式 close → 相机释放
+    （滞留消费方清理不依赖 GC 终结时机，bench 超时收尾依赖此语义）。"""
+    fake = fake_dxcam([np.zeros((4, 4, 1), dtype=np.uint8)])
+    gen = iter_desktop(backend="dxgi")
+    next(gen)
+    gen.close()
+    assert fake.camera is not None and fake.camera.released

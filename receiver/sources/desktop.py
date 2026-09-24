@@ -88,9 +88,11 @@ def _dxgi_capture(region: dict | None):
     产出帧（发送端开播即有更新）；这期间消费端阻塞在迭代器上属预期。
 
     系统过渡恢复：前台切换、UAC 安全桌面、显示模式变更等会使 duplication
-    失效（ACCESS_LOST 0x887A0026 等），dxcam 的 grab 抛异常。适配器释放
-    并重建相机后继续采集，期间重发上一帧维持「重复捕获」语义——单次
-    过渡只损失亚秒级画面，不终止接收。
+    失效（ACCESS_LOST 0x887A0026 等），dxcam 的 grab 抛异常。适配器先重试
+    几次（dxcam 自带 output-change recovery），连续失败才释放并重建相机
+    （dxcam 相机按 device/output/backend 单例注册，release 后 create 能
+    正确丢弃旧实例）；恢复期重发上一帧维持「重复捕获」语义——单次过渡
+    只损失亚秒级画面，不终止接收。
     """
     import dxcam  # 延迟导入：仅 dxgi 后端真实采集需要
 
@@ -100,6 +102,7 @@ def _dxgi_capture(region: dict | None):
     camera = None
     last = None
     create_failures = 0
+    grab_failures = 0
     try:
         while True:
             if camera is None:
@@ -116,14 +119,21 @@ def _dxgi_capture(region: dict | None):
                     continue
             try:
                 frame = camera.grab(new_frame_only=True)  # 静屏 None，~0.6ms
+                grab_failures = 0
             except Exception:  # noqa: BLE001  duplication 失效（HRESULT 各异）
-                try:
+                grab_failures += 1
+                if grab_failures < 5:
+                    # dxcam 内部恢复需要几拍：重试期重发上一帧维持语义
+                    if last is not None:
+                        yield last.reshape(last.shape[0], last.shape[1])
+                    time.sleep(0.2)
+                    continue
+                try:  # 连续失败才重建：release 后单例注册表丢弃旧实例
                     camera.release()
                 except Exception:  # noqa: BLE001  释放失败不阻断重建
                     pass
                 camera = None
-                if last is not None:  # 过渡恢复期维持重复捕获语义
-                    yield last.reshape(last.shape[0], last.shape[1])
+                grab_failures = 0
                 time.sleep(0.2)  # 等系统过渡完成再重建
                 continue
             if frame is not None:
@@ -142,13 +152,19 @@ def _dxgi_capture(region: dict | None):
 
 def iter_desktop(region: dict | None = None, capture=None, backend: str = "mss"):
     """desktop 源迭代器：capture 缺省按 backend 真实抓屏（mss / dxgi），
-    测试可注入图像序列。"""
+    测试可注入图像序列。关闭时显式 close 内层采集生成器（释放抓屏资源，
+    不依赖 GC 终结时机）。"""
     gate = StableFrameGate()
     seq = 0
     if capture is None:
         capture = _dxgi_capture(region) if backend == "dxgi" else _mss_capture(region)
-    for gray in capture:
-        out = gate.feed(gray)
-        if out is not None:
-            seq += 1
-            yield f"desktop-{seq:06d}", out
+    try:
+        for gray in capture:
+            out = gate.feed(gray)
+            if out is not None:
+                seq += 1
+                yield f"desktop-{seq:06d}", out
+    finally:
+        close = getattr(capture, "close", None)
+        if close is not None:
+            close()
