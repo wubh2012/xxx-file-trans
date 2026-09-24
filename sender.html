@@ -75,6 +75,11 @@
     padding: 4px 12px; cursor: pointer; font: inherit;
   }
   body.playing.window #stopBtn { display: block; }
+  #ui .hint { margin: 6px 0 0; font-size: 12px; color: #666; max-width: 480px; }
+  #windowSizeRow { display: inline-block; vertical-align: middle; margin-left: 8px; }
+  #windowSizeRow[hidden] { display: none; }   /* 显式声明，防上面的 display 覆盖 hidden 的 UA 默认 */
+  #windowSizeRow input { width: 5.5em; }
+  #windowSizeRow .hint { max-width: none; }
 </style>
 </head>
 <body>
@@ -82,14 +87,22 @@
   <h1>文件摆渡发送端</h1>
   <fieldset>
     <legend>发送参数</legend>
-    <label title="CSS 像素；实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值">BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
-    <label>PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
-    <label>FPS <input id="fps" type="number" min="1" max="30" value="5"></label>
+    <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）">BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
+    <label title="数据网格四周黑色静默区的宽度，单位为 BIT 像素的倍数。用于隔离画面背景并容纳四角白色角标（角标边长 = 3×BIT，故必须 ≥ 3）。接收端按帧头声明的 PAD 校验，采集画面可任意裁切边距">PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
+    <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传。camera 拍摄建议保守，desktop 抓屏可更高">FPS <input id="fps" type="number" min="1" max="30" value="10"></label>
+    <p class="hint">BIT＝方块边长（px/块，越大越稳但越慢）；PAD＝网格四周黑色静默边（×BIT，容纳角标）；FPS＝每秒帧数（越高越快，拍摄易糊帧）。悬停各参数可看详细说明。</p>
   </fieldset>
   <fieldset>
     <legend>播放模式</legend>
     <button id="modeFullscreen" type="button" class="modeBtn" aria-pressed="true">全屏播放（camera 拍摄）</button>
     <button id="modeWindow" type="button" class="modeBtn" aria-pressed="false">窗口播放（desktop 抓屏）</button>
+    <span id="windowSizeRow" hidden>
+      <label title="窗口模式下画面区域的显示尺寸（CSS px，与 BIT 输入同口径，实际按显示缩放换算物理像素）。留空＝随视口自动（减四周垫边）。浏览器页面脚本无法调整窗口大小，请自行把浏览器窗口拉到能容纳画面">窗口画面
+        <input id="winW" type="number" min="64" step="1" placeholder="自动"> ×
+        <input id="winH" type="number" min="64" step="1" placeholder="自动"> px
+      </label>
+      <span class="hint">留空＝随视口自动；填宽高＝画面按该尺寸渲染（播放中调整浏览器窗口不影响几何参数）</span>
+    </span>
   </fieldset>
   <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 按所选模式循环播放）</div>
   <input id="file" type="file" hidden>
@@ -139,19 +152,34 @@ const state = {
 
 /* ---------- 几何推导：按屏幕自动反推 COLS/ROWS（物理像素口径，issue #20） ---------- */
 const WINDOW_PAD_CSS = 48;  // 窗口播放四周垫边（CSS px，量级不进协议，与 body.playing.window 的 padding 一致）
+/* 窗口播放自定义画面尺寸：两框均留空 → null（随视口自动）；任一填写 → 两框都必须是 ≥64 的整数。
+   抛错走 deriveGeometry 既有错误通路（startPlayback 捕获并回显状态栏） */
+function parseWindowSize() {
+  const wRaw = el('winW').value.trim(), hRaw = el('winH').value.trim();
+  if (!wRaw && !hRaw) return null;
+  const w = parseInt(wRaw, 10), h = parseInt(hRaw, 10);
+  if (!w || !h || w < 64 || h < 64) {
+    throw new Error('窗口画面尺寸无效：宽高均需 ≥ 64 px，或留空按视口自动');
+  }
+  return { w, h };
+}
 function deriveGeometry() {
   // 一律按物理像素推导：devicePixelRatio = OS 缩放 × 页面缩放，一并覆盖
   // 显示缩放（125%/150%）与页面缩放（Ctrl+-）两种场景。接收端（mss 抓屏）
   // 看到的是物理像素，帧头 BIT 声明物理值才能通过冻结校验（协议 §5）
   const dpr = window.devicePixelRatio || 1;
   // 可用 CSS 尺寸：全屏取窗口与屏幕的较小者（全屏成功时两者相等，既有口径）；
-  // 窗口取视口减四周垫边（issue #21），保证画布完整可见且不贴窗口边框
-  const availW = state.playMode === 'window'
-    ? innerWidth - 2 * WINDOW_PAD_CSS
-    : Math.min(screen.width, innerWidth);
-  const availH = state.playMode === 'window'
-    ? innerHeight - 2 * WINDOW_PAD_CSS
-    : Math.min(screen.height, innerHeight);
+  // 窗口优先用用户显式设定的画面区域尺寸（CSS px，窗口播放可自定义大小），
+  // 留空则取视口减四周垫边（issue #21），保证画布完整可见且不贴窗口边框
+  let availW, availH;
+  if (state.playMode === 'window') {
+    const custom = parseWindowSize();
+    availW = custom ? custom.w : innerWidth - 2 * WINDOW_PAD_CSS;
+    availH = custom ? custom.h : innerHeight - 2 * WINDOW_PAD_CSS;
+  } else {
+    availW = Math.min(screen.width, innerWidth);
+    availH = Math.min(screen.height, innerHeight);
+  }
   const W = Math.max(1, Math.round(availW * dpr));
   const H = Math.max(1, Math.round(availH * dpr));
   const pad = clampInt(el('pad').value, 3, 15);   // PAD < 3 放不下 3×BIT 角标
@@ -608,6 +636,7 @@ function setPlayMode(mode) {
   el('modeFullscreen').setAttribute('aria-pressed', String(mode === 'fullscreen'));
   el('modeWindow').setAttribute('aria-pressed', String(mode === 'window'));
   el('stopHint').textContent = m.stopHint;
+  el('windowSizeRow').hidden = mode !== 'window';   // 窗口画面尺寸仅窗口模式可设
   setStatus(`播放模式：${m.label}（${m.source}）`);
 }
 el('modeFullscreen').addEventListener('click', () => setPlayMode('fullscreen'));
