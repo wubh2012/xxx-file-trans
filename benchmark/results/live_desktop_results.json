@@ -1,0 +1,413 @@
+{
+  "meta": {
+    "generated_at": "2026-09-24T07:01:19.712498+00:00",
+    "mode": "live-desktop",
+    "fps_list": [
+      10,
+      15,
+      20,
+      30
+    ],
+    "size_mib": 5,
+    "reps": 3,
+    "calib_cycles": 1,
+    "bit_css": 8,
+    "pad": 4,
+    "window": [
+      1920,
+      1040
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）"
+  },
+  "calibrations": [
+    {
+      "fps": 10,
+      "calib_s": 214.6,
+      "measuredFps": {
+        "median": 9.62,
+        "p5": 8.01,
+        "p95": 10.95
+      },
+      "report": {
+        "frames": 2054,
+        "decoded": 2054,
+        "decodeRate": 1.0,
+        "crcReached": 2054,
+        "crcPassed": 2054,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 2054,
+        "measuredBit": 8,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 8,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x450E44BA",
+            "totalFrames": 2025,
+            "received": 2033,
+            "unique": 2025,
+            "missing": 0,
+            "missingRate": 0.0,
+            "duplicates": 8,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 9.62,
+          "p5": 8.01,
+          "p95": 10.95
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 0/2025：实测干净，可尝试再上一档"
+    },
+    {
+      "fps": 15,
+      "calib_s": 146.4,
+      "measuredFps": {
+        "median": 14.46,
+        "p5": 11.79,
+        "p95": 18.2
+      },
+      "report": {
+        "frames": 2107,
+        "decoded": 2107,
+        "decodeRate": 1.0,
+        "crcReached": 2107,
+        "crcPassed": 2107,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 2107,
+        "measuredBit": 8,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 8,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0xF325DF2E",
+            "totalFrames": 2025,
+            "received": 2087,
+            "unique": 2025,
+            "missing": 0,
+            "missingRate": 0.0,
+            "duplicates": 62,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 14.46,
+          "p5": 11.79,
+          "p95": 18.2
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 0/2025：实测干净，可尝试再上一档"
+    },
+    {
+      "fps": 20,
+      "calib_s": 112.3,
+      "measuredFps": {
+        "median": 16.37,
+        "p5": 9.52,
+        "p95": 18.23
+      },
+      "report": {
+        "frames": 1613,
+        "decoded": 1613,
+        "decodeRate": 1.0,
+        "crcReached": 1613,
+        "crcPassed": 1613,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 1613,
+        "measuredBit": 8,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 8,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0xCFF0A909",
+            "totalFrames": 2025,
+            "received": 1598,
+            "unique": 1598,
+            "missing": 427,
+            "missingRate": 0.2108641975308642,
+            "duplicates": 0,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 16.37,
+          "p5": 9.52,
+          "p95": 18.23
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 427/2025（21.1%）：显著，建议降档"
+    },
+    {
+      "fps": 30,
+      "calib_s": 78.2,
+      "measuredFps": {
+        "median": 0.2,
+        "p5": 0.18,
+        "p95": 3.99
+      },
+      "report": {
+        "frames": 19,
+        "decoded": 0,
+        "decodeRate": 0.0,
+        "crcReached": 13,
+        "crcPassed": 0,
+        "crcRate": 0.0,
+        "rejected": {
+          "sync": 2,
+          "geometry": 4,
+          "crc": 13
+        },
+        "probed": 15,
+        "measuredBit": 8,
+        "measuredPad": 11,
+        "residualPx": 0,
+        "BIT": 8,
+        "PAD": 11,
+        "transfers": [],
+        "measuredFps": {
+          "median": 0.2,
+          "p5": 0.18,
+          "p95": 3.99
+        },
+        "interrupted": false
+      },
+      "verdict": "无数据帧可判级"
+    }
+  ],
+  "runs": [
+    {
+      "fps": 10,
+      "geo": {
+        "fps": 10,
+        "bit": 8,
+        "cols": 218,
+        "rows": 96,
+        "chunk": 2590,
+        "total": 2025
+      },
+      "cycle_s": 204.6,
+      "dpr": 1,
+      "region": {
+        "left": 0,
+        "top": 72,
+        "width": 1920,
+        "height": 992
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 10,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 213.994,
+          "elapsed_s": 213.699,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 10,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 213.791,
+          "elapsed_s": 213.489,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 10,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 409.198,
+          "elapsed_s": 408.884,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 252,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 15,
+      "geo": {
+        "fps": 15,
+        "bit": 8,
+        "cols": 218,
+        "rows": 96,
+        "chunk": 2590,
+        "total": 2025
+      },
+      "cycle_s": 136.4,
+      "dpr": 1,
+      "region": {
+        "left": 0,
+        "top": 72,
+        "width": 1920,
+        "height": 992
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 281.611,
+          "elapsed_s": 281.352,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 142.349,
+          "elapsed_s": 142.065,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 280.12,
+          "elapsed_s": 279.844,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 20,
+      "geo": {
+        "fps": 20,
+        "bit": 8,
+        "cols": 218,
+        "rows": 96,
+        "chunk": 2590,
+        "total": 2025
+      },
+      "cycle_s": 102.3,
+      "dpr": 1,
+      "region": {
+        "left": 0,
+        "top": 72,
+        "width": 1920,
+        "height": 992
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 509.572,
+          "elapsed_s": 509.32,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 538.828,
+          "elapsed_s": 538.562,
+          "received": 2025,
+          "total": 2025,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 632.681,
+          "note": "超时 632s 未还原（滞留线程随循环自行收尾）"
+        }
+      ]
+    },
+    {
+      "fps": 30,
+      "geo": {
+        "fps": 30,
+        "bit": 8,
+        "cols": 218,
+        "rows": 96,
+        "chunk": 2590,
+        "total": 2025
+      },
+      "cycle_s": 68.2,
+      "dpr": 1,
+      "region": {
+        "left": 0,
+        "top": 72,
+        "width": 1920,
+        "height": 992
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 430.204,
+          "note": "超时 430s 未还原（滞留线程随循环自行收尾）"
+        },
+        {
+          "rep": 1,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 430.202,
+          "note": "超时 430s 未还原（滞留线程随循环自行收尾）"
+        },
+        {
+          "rep": 2,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 430.224,
+          "note": "超时 430s 未还原（滞留线程随循环自行收尾）"
+        }
+      ]
+    }
+  ]
+}

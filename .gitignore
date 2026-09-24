@@ -9,3 +9,4 @@ frames_png/
 frames.json
 .pytest_cache/
 .tmp/
+benchmark/results/work/
