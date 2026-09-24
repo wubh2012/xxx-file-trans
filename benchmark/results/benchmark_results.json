@@ -1,0 +1,1419 @@
+{
+  "meta": {
+    "generated_at": "2026-09-23T15:29:22.669902+00:00",
+    "python": "3.13.1",
+    "pad": 4,
+    "dpr": 1,
+    "windows": [
+      [
+        800,
+        600
+      ],
+      [
+        1280,
+        800
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "bits": [
+      4,
+      8,
+      12
+    ],
+    "fps_list": [
+      5,
+      10,
+      20
+    ],
+    "sizes_mib": [
+      1,
+      5,
+      10,
+      20
+    ],
+    "max_full_frames": 4000,
+    "sample_data_frames": 120,
+    "metric_note": "receive_elapsed_s = receiver.run.run_receive 的 elapsed（首数据帧落地→还原写盘完成，全速）；total_s = max(导出帧数/FPS, 解帧耗时)"
+  },
+  "runs": [
+    {
+      "size_mib": 1,
+      "window": "800x600",
+      "bit_input": 4,
+      "bit": 4,
+      "pad": 4,
+      "cols": 192,
+      "rows": 142,
+      "chunk_bytes": 3382,
+      "sampled": false,
+      "data_frames": 311,
+      "exported_frames": 315,
+      "export_s": 1.276,
+      "receive_elapsed_s": 2.042,
+      "receive_wall_s": 2.065,
+      "est_decode_s": 2.042,
+      "decode_fps": 154.3,
+      "per_frame_ms": 6.482,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 63.0,
+        "total_s": 63.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps10": {
+        "channel_s": 31.5,
+        "total_s": 31.5,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      },
+      "fps20": {
+        "channel_s": 15.8,
+        "total_s": 15.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.063
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "800x600",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 92,
+      "rows": 66,
+      "chunk_bytes": 733,
+      "sampled": false,
+      "data_frames": 1431,
+      "exported_frames": 1446,
+      "export_s": 4.193,
+      "receive_elapsed_s": 6.29,
+      "receive_wall_s": 6.311,
+      "est_decode_s": 6.29,
+      "decode_fps": 229.9,
+      "per_frame_ms": 4.35,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 289.2,
+        "total_s": 289.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 144.6,
+        "total_s": 144.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps20": {
+        "channel_s": 72.3,
+        "total_s": 72.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "800x600",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 58,
+      "rows": 40,
+      "chunk_bytes": 264,
+      "sampled": false,
+      "data_frames": 3974,
+      "exported_frames": 4014,
+      "export_s": 11.796,
+      "receive_elapsed_s": 17.693,
+      "receive_wall_s": 17.728,
+      "est_decode_s": 17.693,
+      "decode_fps": 226.9,
+      "per_frame_ms": 4.408,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 802.8,
+        "total_s": 802.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.001
+      },
+      "fps10": {
+        "channel_s": 401.4,
+        "total_s": 401.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.002
+      },
+      "fps20": {
+        "channel_s": 200.7,
+        "total_s": 200.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.005
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "1280x800",
+      "bit_input": 4,
+      "bit": 5,
+      "pad": 4,
+      "cols": 248,
+      "rows": 152,
+      "chunk_bytes": 4686,
+      "sampled": false,
+      "data_frames": 224,
+      "exported_frames": 227,
+      "export_s": 1.719,
+      "receive_elapsed_s": 2.471,
+      "receive_wall_s": 2.495,
+      "est_decode_s": 2.471,
+      "decode_fps": 91.9,
+      "per_frame_ms": 10.884,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 45.4,
+        "total_s": 45.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.022
+      },
+      "fps10": {
+        "channel_s": 22.7,
+        "total_s": 22.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.044
+      },
+      "fps20": {
+        "channel_s": 11.3,
+        "total_s": 11.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.088
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "1280x800",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 152,
+      "rows": 92,
+      "chunk_bytes": 1722,
+      "sampled": false,
+      "data_frames": 610,
+      "exported_frames": 617,
+      "export_s": 3.71,
+      "receive_elapsed_s": 5.142,
+      "receive_wall_s": 5.165,
+      "est_decode_s": 5.142,
+      "decode_fps": 120.0,
+      "per_frame_ms": 8.333,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 123.4,
+        "total_s": 123.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.008
+      },
+      "fps10": {
+        "channel_s": 61.7,
+        "total_s": 61.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps20": {
+        "channel_s": 30.9,
+        "total_s": 30.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "1280x800",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 98,
+      "rows": 56,
+      "chunk_bytes": 660,
+      "sampled": false,
+      "data_frames": 1590,
+      "exported_frames": 1606,
+      "export_s": 8.379,
+      "receive_elapsed_s": 14.269,
+      "receive_wall_s": 14.299,
+      "est_decode_s": 14.269,
+      "decode_fps": 112.6,
+      "per_frame_ms": 8.885,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 321.2,
+        "total_s": 321.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 160.6,
+        "total_s": 160.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.006
+      },
+      "fps20": {
+        "channel_s": 80.3,
+        "total_s": 80.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.012
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "1920x1080",
+      "bit_input": 4,
+      "bit": 8,
+      "pad": 4,
+      "cols": 232,
+      "rows": 127,
+      "chunk_bytes": 3657,
+      "sampled": false,
+      "data_frames": 287,
+      "exported_frames": 290,
+      "export_s": 3.968,
+      "receive_elapsed_s": 4.556,
+      "receive_wall_s": 4.59,
+      "est_decode_s": 4.556,
+      "decode_fps": 63.7,
+      "per_frame_ms": 15.71,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 58.0,
+        "total_s": 58.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.017
+      },
+      "fps10": {
+        "channel_s": 29.0,
+        "total_s": 29.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.034
+      },
+      "fps20": {
+        "channel_s": 14.5,
+        "total_s": 14.5,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.069
+      }
+    },
+    {
+      "size_mib": 1,
+      "window": "1920x1080",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 152,
+      "rows": 82,
+      "chunk_bytes": 1532,
+      "sampled": false,
+      "data_frames": 685,
+      "exported_frames": 692,
+      "export_s": 7.677,
+      "receive_elapsed_s": 10.87,
+      "receive_wall_s": 10.906,
+      "est_decode_s": 10.87,
+      "decode_fps": 63.7,
+      "per_frame_ms": 15.708,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 138.4,
+        "total_s": 138.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps10": {
+        "channel_s": 69.2,
+        "total_s": 69.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      },
+      "fps20": {
+        "channel_s": 34.6,
+        "total_s": 34.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.029
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "800x600",
+      "bit_input": 4,
+      "bit": 4,
+      "pad": 4,
+      "cols": 192,
+      "rows": 142,
+      "chunk_bytes": 3382,
+      "sampled": false,
+      "data_frames": 1551,
+      "exported_frames": 1567,
+      "export_s": 6.462,
+      "receive_elapsed_s": 11.769,
+      "receive_wall_s": 11.807,
+      "est_decode_s": 11.769,
+      "decode_fps": 133.2,
+      "per_frame_ms": 7.51,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 313.4,
+        "total_s": 313.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps10": {
+        "channel_s": 156.7,
+        "total_s": 156.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      },
+      "fps20": {
+        "channel_s": 78.3,
+        "total_s": 78.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.064
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "800x600",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 92,
+      "rows": 66,
+      "chunk_bytes": 733,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.437,
+        "receive_elapsed_s": 0.617,
+        "receive_wall_s": 0.631,
+        "per_frame_ms": 5.053,
+        "decode_fps": 197.9,
+        "file_id": "F4AA3FD7",
+        "size_bytes": 87593
+      },
+      "data_frames": 7153,
+      "exported_frames": 7225,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 36.5,
+      "decode_fps": 197.9,
+      "per_frame_ms": 5.053,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1445.0,
+        "total_s": 1445.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 722.5,
+        "total_s": 722.5,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps20": {
+        "channel_s": 361.2,
+        "total_s": 361.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "800x600",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 58,
+      "rows": 40,
+      "chunk_bytes": 264,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.366,
+        "receive_elapsed_s": 0.589,
+        "receive_wall_s": 0.602,
+        "per_frame_ms": 4.826,
+        "decode_fps": 207.2,
+        "file_id": "5A6B2F0B",
+        "size_bytes": 31548
+      },
+      "data_frames": 19860,
+      "exported_frames": 20059,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 96.8,
+      "decode_fps": 207.2,
+      "per_frame_ms": 4.826,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 4011.8,
+        "total_s": 4011.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.001
+      },
+      "fps10": {
+        "channel_s": 2005.9,
+        "total_s": 2005.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.002
+      },
+      "fps20": {
+        "channel_s": 1003.0,
+        "total_s": 1003.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.005
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "1280x800",
+      "bit_input": 4,
+      "bit": 5,
+      "pad": 4,
+      "cols": 248,
+      "rows": 152,
+      "chunk_bytes": 4686,
+      "sampled": false,
+      "data_frames": 1120,
+      "exported_frames": 1132,
+      "export_s": 8.462,
+      "receive_elapsed_s": 11.894,
+      "receive_wall_s": 11.929,
+      "est_decode_s": 11.894,
+      "decode_fps": 95.2,
+      "per_frame_ms": 10.507,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 226.4,
+        "total_s": 226.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.022
+      },
+      "fps10": {
+        "channel_s": 113.2,
+        "total_s": 113.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.044
+      },
+      "fps20": {
+        "channel_s": 56.6,
+        "total_s": 56.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.088
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "1280x800",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 152,
+      "rows": 92,
+      "chunk_bytes": 1722,
+      "sampled": false,
+      "data_frames": 3046,
+      "exported_frames": 3077,
+      "export_s": 19.299,
+      "receive_elapsed_s": 27.328,
+      "receive_wall_s": 27.369,
+      "est_decode_s": 27.328,
+      "decode_fps": 112.6,
+      "per_frame_ms": 8.881,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 615.4,
+        "total_s": 615.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.008
+      },
+      "fps10": {
+        "channel_s": 307.7,
+        "total_s": 307.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps20": {
+        "channel_s": 153.8,
+        "total_s": 153.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "1280x800",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 98,
+      "rows": 56,
+      "chunk_bytes": 660,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.628,
+        "receive_elapsed_s": 0.978,
+        "receive_wall_s": 0.997,
+        "per_frame_ms": 8.02,
+        "decode_fps": 124.7,
+        "file_id": "B7304BB4",
+        "size_bytes": 78870
+      },
+      "data_frames": 7944,
+      "exported_frames": 8024,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 64.4,
+      "decode_fps": 124.7,
+      "per_frame_ms": 8.02,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1604.8,
+        "total_s": 1604.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 802.4,
+        "total_s": 802.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.006
+      },
+      "fps20": {
+        "channel_s": 401.2,
+        "total_s": 401.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.012
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "1920x1080",
+      "bit_input": 4,
+      "bit": 8,
+      "pad": 4,
+      "cols": 232,
+      "rows": 127,
+      "chunk_bytes": 3657,
+      "sampled": false,
+      "data_frames": 1435,
+      "exported_frames": 1450,
+      "export_s": 18.607,
+      "receive_elapsed_s": 27.919,
+      "receive_wall_s": 27.968,
+      "est_decode_s": 27.919,
+      "decode_fps": 51.9,
+      "per_frame_ms": 19.255,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 290.0,
+        "total_s": 290.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.017
+      },
+      "fps10": {
+        "channel_s": 145.0,
+        "total_s": 145.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.034
+      },
+      "fps20": {
+        "channel_s": 72.5,
+        "total_s": 72.5,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.069
+      }
+    },
+    {
+      "size_mib": 5,
+      "window": "1920x1080",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 152,
+      "rows": 82,
+      "chunk_bytes": 1532,
+      "sampled": false,
+      "data_frames": 3424,
+      "exported_frames": 3459,
+      "export_s": 51.785,
+      "receive_elapsed_s": 78.909,
+      "receive_wall_s": 78.964,
+      "est_decode_s": 78.909,
+      "decode_fps": 43.8,
+      "per_frame_ms": 22.813,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 691.8,
+        "total_s": 691.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps10": {
+        "channel_s": 345.9,
+        "total_s": 345.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      },
+      "fps20": {
+        "channel_s": 172.9,
+        "total_s": 172.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.029
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "800x600",
+      "bit_input": 4,
+      "bit": 4,
+      "pad": 4,
+      "cols": 192,
+      "rows": 142,
+      "chunk_bytes": 3382,
+      "sampled": false,
+      "data_frames": 3102,
+      "exported_frames": 3134,
+      "export_s": 20.69,
+      "receive_elapsed_s": 27.156,
+      "receive_wall_s": 27.213,
+      "est_decode_s": 27.156,
+      "decode_fps": 115.4,
+      "per_frame_ms": 8.665,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 626.8,
+        "total_s": 626.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps10": {
+        "channel_s": 313.4,
+        "total_s": 313.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      },
+      "fps20": {
+        "channel_s": 156.7,
+        "total_s": 156.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.064
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "800x600",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 92,
+      "rows": 66,
+      "chunk_bytes": 733,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.489,
+        "receive_elapsed_s": 0.661,
+        "receive_wall_s": 0.677,
+        "per_frame_ms": 5.417,
+        "decode_fps": 184.6,
+        "file_id": "C3F6BB09",
+        "size_bytes": 87593
+      },
+      "data_frames": 14306,
+      "exported_frames": 14450,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 78.3,
+      "decode_fps": 184.6,
+      "per_frame_ms": 5.417,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 2890.0,
+        "total_s": 2890.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 1445.0,
+        "total_s": 1445.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps20": {
+        "channel_s": 722.5,
+        "total_s": 722.5,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "800x600",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 58,
+      "rows": 40,
+      "chunk_bytes": 264,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.36,
+        "receive_elapsed_s": 0.616,
+        "receive_wall_s": 0.628,
+        "per_frame_ms": 5.046,
+        "decode_fps": 198.2,
+        "file_id": "EDC04594",
+        "size_bytes": 31548
+      },
+      "data_frames": 39719,
+      "exported_frames": 40117,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 202.4,
+      "decode_fps": 198.2,
+      "per_frame_ms": 5.046,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 8023.4,
+        "total_s": 8023.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.001
+      },
+      "fps10": {
+        "channel_s": 4011.7,
+        "total_s": 4011.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.002
+      },
+      "fps20": {
+        "channel_s": 2005.8,
+        "total_s": 2005.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.005
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "1280x800",
+      "bit_input": 4,
+      "bit": 5,
+      "pad": 4,
+      "cols": 248,
+      "rows": 152,
+      "chunk_bytes": 4686,
+      "sampled": false,
+      "data_frames": 2239,
+      "exported_frames": 2262,
+      "export_s": 19.175,
+      "receive_elapsed_s": 28.744,
+      "receive_wall_s": 28.802,
+      "est_decode_s": 28.744,
+      "decode_fps": 78.7,
+      "per_frame_ms": 12.707,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 452.4,
+        "total_s": 452.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.022
+      },
+      "fps10": {
+        "channel_s": 226.2,
+        "total_s": 226.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.044
+      },
+      "fps20": {
+        "channel_s": 113.1,
+        "total_s": 113.1,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.088
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "1280x800",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 152,
+      "rows": 92,
+      "chunk_bytes": 1722,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.952,
+        "receive_elapsed_s": 1.201,
+        "receive_wall_s": 1.226,
+        "per_frame_ms": 9.842,
+        "decode_fps": 101.6,
+        "file_id": "670F6573",
+        "size_bytes": 205779
+      },
+      "data_frames": 6090,
+      "exported_frames": 6151,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 60.5,
+      "decode_fps": 101.6,
+      "per_frame_ms": 9.842,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1230.2,
+        "total_s": 1230.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.008
+      },
+      "fps10": {
+        "channel_s": 615.1,
+        "total_s": 615.1,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps20": {
+        "channel_s": 307.6,
+        "total_s": 307.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.033
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "1280x800",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 98,
+      "rows": 56,
+      "chunk_bytes": 660,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.753,
+        "receive_elapsed_s": 1.009,
+        "receive_wall_s": 1.033,
+        "per_frame_ms": 8.274,
+        "decode_fps": 120.9,
+        "file_id": "34570268",
+        "size_bytes": 78870
+      },
+      "data_frames": 15888,
+      "exported_frames": 16047,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 132.8,
+      "decode_fps": 120.9,
+      "per_frame_ms": 8.274,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 3209.4,
+        "total_s": 3209.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 1604.7,
+        "total_s": 1604.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.006
+      },
+      "fps20": {
+        "channel_s": 802.4,
+        "total_s": 802.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.012
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "1920x1080",
+      "bit_input": 4,
+      "bit": 8,
+      "pad": 4,
+      "cols": 232,
+      "rows": 127,
+      "chunk_bytes": 3657,
+      "sampled": false,
+      "data_frames": 2869,
+      "exported_frames": 2898,
+      "export_s": 37.972,
+      "receive_elapsed_s": 49.102,
+      "receive_wall_s": 49.163,
+      "est_decode_s": 49.102,
+      "decode_fps": 59.0,
+      "per_frame_ms": 16.943,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 579.6,
+        "total_s": 579.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.017
+      },
+      "fps10": {
+        "channel_s": 289.8,
+        "total_s": 289.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.035
+      },
+      "fps20": {
+        "channel_s": 144.9,
+        "total_s": 144.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.069
+      }
+    },
+    {
+      "size_mib": 10,
+      "window": "1920x1080",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 152,
+      "rows": 82,
+      "chunk_bytes": 1532,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 1.404,
+        "receive_elapsed_s": 1.938,
+        "receive_wall_s": 1.972,
+        "per_frame_ms": 15.888,
+        "decode_fps": 62.9,
+        "file_id": "53FEEE97",
+        "size_bytes": 183074
+      },
+      "data_frames": 6845,
+      "exported_frames": 6914,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 109.8,
+      "decode_fps": 62.9,
+      "per_frame_ms": 15.888,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1382.8,
+        "total_s": 1382.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps10": {
+        "channel_s": 691.4,
+        "total_s": 691.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      },
+      "fps20": {
+        "channel_s": 345.7,
+        "total_s": 345.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.029
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "800x600",
+      "bit_input": 4,
+      "bit": 4,
+      "pad": 4,
+      "cols": 192,
+      "rows": 142,
+      "chunk_bytes": 3382,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.483,
+        "receive_elapsed_s": 0.778,
+        "receive_wall_s": 0.792,
+        "per_frame_ms": 6.38,
+        "decode_fps": 156.7,
+        "file_id": "1D61A656",
+        "size_bytes": 404149
+      },
+      "data_frames": 6201,
+      "exported_frames": 6264,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 40.0,
+      "decode_fps": 156.7,
+      "per_frame_ms": 6.38,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1252.8,
+        "total_s": 1252.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps10": {
+        "channel_s": 626.4,
+        "total_s": 626.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.032
+      },
+      "fps20": {
+        "channel_s": 313.2,
+        "total_s": 313.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.064
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "800x600",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 92,
+      "rows": 66,
+      "chunk_bytes": 733,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.351,
+        "receive_elapsed_s": 0.531,
+        "receive_wall_s": 0.543,
+        "per_frame_ms": 4.356,
+        "decode_fps": 229.6,
+        "file_id": "0D77C6B2",
+        "size_bytes": 87593
+      },
+      "data_frames": 28611,
+      "exported_frames": 28898,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 125.9,
+      "decode_fps": 229.6,
+      "per_frame_ms": 4.356,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 5779.6,
+        "total_s": 5779.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 2889.8,
+        "total_s": 2889.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps20": {
+        "channel_s": 1444.9,
+        "total_s": 1444.9,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "800x600",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 58,
+      "rows": 40,
+      "chunk_bytes": 264,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.29,
+        "receive_elapsed_s": 0.511,
+        "receive_wall_s": 0.522,
+        "per_frame_ms": 4.187,
+        "decode_fps": 238.8,
+        "file_id": "EB7C21E3",
+        "size_bytes": 31548
+      },
+      "data_frames": 79438,
+      "exported_frames": 80233,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 335.9,
+      "decode_fps": 238.8,
+      "per_frame_ms": 4.187,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 16046.6,
+        "total_s": 16046.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.001
+      },
+      "fps10": {
+        "channel_s": 8023.3,
+        "total_s": 8023.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.002
+      },
+      "fps20": {
+        "channel_s": 4011.7,
+        "total_s": 4011.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.005
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "1280x800",
+      "bit_input": 4,
+      "bit": 5,
+      "pad": 4,
+      "cols": 248,
+      "rows": 152,
+      "chunk_bytes": 4686,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.854,
+        "receive_elapsed_s": 1.243,
+        "receive_wall_s": 1.265,
+        "per_frame_ms": 10.187,
+        "decode_fps": 98.2,
+        "file_id": "3B788EE4",
+        "size_bytes": 559977
+      },
+      "data_frames": 4476,
+      "exported_frames": 4521,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 46.1,
+      "decode_fps": 98.2,
+      "per_frame_ms": 10.187,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 904.2,
+        "total_s": 904.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.022
+      },
+      "fps10": {
+        "channel_s": 452.1,
+        "total_s": 452.1,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.044
+      },
+      "fps20": {
+        "channel_s": 226.1,
+        "total_s": 226.1,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.088
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "1280x800",
+      "bit_input": 8,
+      "bit": 8,
+      "pad": 4,
+      "cols": 152,
+      "rows": 92,
+      "chunk_bytes": 1722,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.713,
+        "receive_elapsed_s": 0.976,
+        "receive_wall_s": 0.995,
+        "per_frame_ms": 8.001,
+        "decode_fps": 125.0,
+        "file_id": "D54539E1",
+        "size_bytes": 205779
+      },
+      "data_frames": 12179,
+      "exported_frames": 12301,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 98.4,
+      "decode_fps": 125.0,
+      "per_frame_ms": 8.001,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 2460.2,
+        "total_s": 2460.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.008
+      },
+      "fps10": {
+        "channel_s": 1230.1,
+        "total_s": 1230.1,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.016
+      },
+      "fps20": {
+        "channel_s": 615.0,
+        "total_s": 615.0,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.033
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "1280x800",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 98,
+      "rows": 56,
+      "chunk_bytes": 660,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 0.596,
+        "receive_elapsed_s": 1.02,
+        "receive_wall_s": 1.038,
+        "per_frame_ms": 8.359,
+        "decode_fps": 119.6,
+        "file_id": "529F1C3B",
+        "size_bytes": 78870
+      },
+      "data_frames": 31776,
+      "exported_frames": 32094,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 268.3,
+      "decode_fps": 119.6,
+      "per_frame_ms": 8.359,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 6418.8,
+        "total_s": 6418.8,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.003
+      },
+      "fps10": {
+        "channel_s": 3209.4,
+        "total_s": 3209.4,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.006
+      },
+      "fps20": {
+        "channel_s": 1604.7,
+        "total_s": 1604.7,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.012
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "1920x1080",
+      "bit_input": 4,
+      "bit": 8,
+      "pad": 4,
+      "cols": 232,
+      "rows": 127,
+      "chunk_bytes": 3657,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 1.788,
+        "receive_elapsed_s": 2.204,
+        "receive_wall_s": 2.244,
+        "per_frame_ms": 18.066,
+        "decode_fps": 55.4,
+        "file_id": "D0469F85",
+        "size_bytes": 437011
+      },
+      "data_frames": 5735,
+      "exported_frames": 5793,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 104.7,
+      "decode_fps": 55.4,
+      "per_frame_ms": 18.066,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 1158.6,
+        "total_s": 1158.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.017
+      },
+      "fps10": {
+        "channel_s": 579.3,
+        "total_s": 579.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.035
+      },
+      "fps20": {
+        "channel_s": 289.6,
+        "total_s": 289.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.069
+      }
+    },
+    {
+      "size_mib": 20,
+      "window": "1920x1080",
+      "bit_input": 12,
+      "bit": 12,
+      "pad": 4,
+      "cols": 152,
+      "rows": 82,
+      "chunk_bytes": 1532,
+      "sampled": true,
+      "sample": {
+        "data_frames": 120,
+        "exported_frames": 122,
+        "export_s": 1.543,
+        "receive_elapsed_s": 2.18,
+        "receive_wall_s": 2.216,
+        "per_frame_ms": 17.866,
+        "decode_fps": 56.0,
+        "file_id": "82D3F6F7",
+        "size_bytes": 183074
+      },
+      "data_frames": 13689,
+      "exported_frames": 13826,
+      "export_s": null,
+      "receive_elapsed_s": null,
+      "est_decode_s": 247.0,
+      "decode_fps": 56.0,
+      "per_frame_ms": 17.866,
+      "sha_ok": true,
+      "fps5": {
+        "channel_s": 2765.2,
+        "total_s": 2765.2,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.007
+      },
+      "fps10": {
+        "channel_s": 1382.6,
+        "total_s": 1382.6,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.014
+      },
+      "fps20": {
+        "channel_s": 691.3,
+        "total_s": 691.3,
+        "bottleneck": "playback",
+        "throughput_mib_s": 0.029
+      }
+    }
+  ]
+}
