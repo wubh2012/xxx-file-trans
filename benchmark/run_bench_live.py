@@ -227,18 +227,25 @@ def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
     """接收线程主体：结果与拒帧计数写入 box（线程内启动采集，随循环播放
     收齐后自然结束；file_id 每轮唯一，滞留不串轮）。
 
-    采集生成器句柄存入 box["capture_gen"]：主线程 join 超时后 close()，
-    向生成器注入 GeneratorExit → _dxgi_capture 的 finally 释放相机——
-    dxcam 相机按 (device, output, backend) 单例注册，滞留线程不放手会
-    占住单例，后续自检/下一轮 create 拿到别人的活相机（2026-09-24 实测）。"""
+    协作停止（run_receive 的 stop_check 缝，issue #26）：box["stop"] 置位后
+    逐帧检查退出，已收帧照常持久化；线程返回时 finally 显式 close 采集
+    生成器释放相机——dxcam 相机按 (device, output, backend) 单例注册且
+    create 对已存在实例直接返回共享对象，滞留线程不放手会让下一轮的
+    两个 grab 循环互抢帧双双饿死（2026-09-24 FPS 45 实测）。"""
     rep = LiveReporter()
     box["reporter"] = rep
+    stop = threading.Event()
+    box["stop"] = stop
     gen = iter_desktop(region=region, backend=backend)
     box["capture_gen"] = gen
     t0 = time.perf_counter()
-    result = run_receive(gen, out_dir, reporter_factory=lambda: rep, notify=None)
-    box["result"] = result
-    box["worker_s"] = time.perf_counter() - t0
+    try:
+        result = run_receive(gen, out_dir, reporter_factory=lambda: rep,
+                             notify=None, stop_check=stop.is_set)
+        box["result"] = result
+    finally:
+        gen.close()
+        box["worker_s"] = time.perf_counter() - t0
 
 
 def verdict_line(report: dict) -> str:
@@ -429,14 +436,17 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                 page.bring_to_front()
                 th.join(timeout=timeout_s)
                 wall = time.perf_counter() - t0
+                if th.is_alive() and "stop" in box:
+                    # 超时滞留：先协作停止（run_receive 逐帧检查，已收帧
+                    # 持久化后线程干净退出并 close 生成器释放相机单例）
+                    box["stop"].set()
+                    th.join(timeout=15)
                 if th.is_alive() and "capture_gen" in box:
-                    # 超时滞留：close 采集生成器（释放 dxgi 相机单例），
-                    # 线程随后自行收尾；不清理会占住单例坑死后续轮次
+                    # 兜底：帧流停滞时 stop_check 无从触发，只能 close 生成器
+                    # （生成器正在执行会抛 ValueError，降级为仅等待）
                     try:
                         box["capture_gen"].close()
                     except ValueError:
-                        # 生成器正在执行（线程阻塞在 next 上）无法注入
-                        # GeneratorExit：仅等待其自然产出后随线程退出
                         print("  [warn] 采集生成器执行中无法 close，仅等待线程",
                               flush=True)
                     th.join(timeout=10)
