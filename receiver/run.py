@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from receiver import paths
-from receiver.pipeline import DecodedFrame, FrameRejected, decode_frame
+from receiver.pipeline import DecodedFrame, FrameRejected, GeometryCache, decode_frame
 from receiver.progress import ProgressReporter
 from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
@@ -66,6 +66,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
         )
 
     stopped = False
+    geo_cache = GeometryCache()  # 角标检测缓存（issue #30 C1）：会话内帧间几何不变
     try:
         with reporter_factory() as reporter:
             try:
@@ -74,7 +75,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                         stopped = True
                         break
                     try:
-                        frame: DecodedFrame = decode_frame(img)
+                        frame: DecodedFrame = decode_frame(img, geo_cache)
                     except FrameRejected as e:
                         reporter.on_rejected(name, e)
                         continue

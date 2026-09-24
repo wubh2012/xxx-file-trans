@@ -40,6 +40,7 @@ import numpy as np
 from receiver.pipeline import (
     DecodedFrame,
     FrameRejected,
+    GeometryCache,
     decode_frame,
     measure_geometry,
 )
@@ -299,6 +300,7 @@ def run_calibration(frames, clock=time.monotonic) -> dict:
     Ctrl+C（desktop 等无限源）不丢弃已统计帧：中断时返回部分报告，
     report['interrupted'] = True。"""
     stats = CalibrationStats()
+    geo_cache = GeometryCache()  # 角标检测缓存（issue #30 C1）：会话内帧间几何不变
     decoded: list[DecodedFrame] = []
     samples: list[GeometrySample] = []
     groups: dict[int, TransferGroup] = {}
@@ -312,7 +314,7 @@ def run_calibration(frames, clock=time.monotonic) -> dict:
                 intervals.append(now - prev)
             prev = now
             try:
-                outcome = decode_frame(img)
+                outcome = decode_frame(img, geo_cache)
             except FrameRejected as e:
                 outcome = e
             tally_frame(stats, outcome)

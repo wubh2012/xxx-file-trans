@@ -180,24 +180,70 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
 
 
 def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, int, int]) -> bytes:
-    """按 BIT 网格采样：单元中心 k×k 窗口（k = min(5, BIT) 取奇）中位数，暗多数 = 1。
+    """按 BIT 网格采样：格心 k×k 邻域（k = min(5, BIT) 取奇）均值 < 128 = 暗多数 = 1。
 
-    黑块 = 1（§1），行优先、字节内 MSB first。
+    黑块 = 1（§1），行优先、字节内 MSB first。bw 经 Otsu 二值化后只含
+    0/255，邻域均值即暗多数表决，不存在 ±1px 级的取整边界歧义。
+    局部采样（issue #30 C2）：按格心收集邻域（O(格心×k²)），不再对整图
+    做 boxFilter（O(像素)）；索引越界处复制边缘，与原 BORDER_REPLICATE 等价。
     """
     x0, y0, _, _ = rect
     k = min(5, geo.bit)
     if k % 2 == 0:
         k -= 1
-    mean = cv2.boxFilter(bw, ddepth=-1, ksize=(k, k), borderType=cv2.BORDER_REPLICATE)
+    half = k // 2
+    img_h, img_w = bw.shape
     centers_y = (y0 + (np.arange(geo.rows) + 0.5) * geo.bit).astype(int)
     centers_x = (x0 + (np.arange(geo.cols) + 0.5) * geo.bit).astype(int)
-    window = mean[np.ix_(centers_y, centers_x)]  # 白色占比（0–255）
-    bits = (window < 128).astype(np.uint8)  # 暗多数 = 黑块 = 1
+    offs = np.arange(-half, half + 1)
+    ys = np.clip(centers_y[:, None, None, None] + offs[None, None, :, None], 0, img_h - 1)  # (rows, 1, k, 1)
+    xs = np.clip(centers_x[None, :, None, None] + offs[None, None, None, :], 0, img_w - 1)  # (1, cols, 1, k)
+    window = bw[ys, xs]  # 广播 → (rows, cols, k, k)
+    mean = window.mean(axis=(2, 3))  # 白色占比（0–255）
+    bits = (mean < 128).astype(np.uint8)  # 暗多数 = 黑块 = 1
     return np.packbits(bits.flatten(), bitorder="big").tobytes()
 
 
-def decode_frame(img: np.ndarray) -> DecodedFrame:
+@dataclass
+class GeometryCache:
+    """角标检测缓存（issue #30 C1）：帧间几何不变时跳过全量连通域检测。
+
+    connectedComponentsWithStats 是 O(像素)，但播放期间几何不变。首帧全量
+    检测后缓存 (geo, rect)，后续帧只做轻量校验：缓存网格矩形外推出的四个
+    角标框（角标内角 = 网格外角，见 measure_geometry）仍为实心白方块
+    （O(side²)）。校验失败（角标被破坏 / 画面尺寸变化 / 裁切偏移漂移）回退
+    全量检测并刷新缓存；误命中由帧头交叉校验 + CRC 兜底（整帧拒绝）。
+    """
+
+    _shape: tuple[int, int] | None = None
+    _geo: MeasuredGeometry | None = None
+    _rect: tuple[int, int, int, int] | None = None
+
+    def measure(self, bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
+        """带缓存的几何测量：命中轻量校验直接复用，否则全量检测（含冻结校验）。"""
+        if self._geo is None or bw.shape != self._shape or not self._corners_intact(bw):
+            self._shape = bw.shape
+            self._geo, self._rect = bootstrap_geometry(bw)
+        return self._geo, self._rect
+
+    def _corners_intact(self, bw: np.ndarray) -> bool:
+        x0, y0, x1, y1 = self._rect
+        side = self._geo.side
+        img_h, img_w = bw.shape
+        for left, top in ((x0 - side, y0 - side), (x1, y0 - side),
+                          (x0 - side, y1), (x1, y1)):
+            if left < 0 or top < 0 or left + side > img_w or top + side > img_h:
+                return False
+            if not bw[top:top + side, left:left + side].all():
+                return False
+        return True
+
+
+def decode_frame(img: np.ndarray, geo_cache: GeometryCache | None = None) -> DecodedFrame:
     """一帧画面 → 解码结果。任一冻结校验不过抛 FrameRejected（整帧丢弃）。
+
+    geo_cache 非 None 时几何测量走缓存（C1，issue #30）：同一接收会话内
+    帧间几何不变，跳过全量角标检测；调用方每会话新建一个即可。
 
     PAD 裁切容忍（issue #22）：网格矩形来自角标、与画布外沿无关，画面
     可在任意偏移处被裁切采集（区域框选「框大一点」）。COLS / ROWS / BIT
@@ -208,7 +254,10 @@ def decode_frame(img: np.ndarray) -> DecodedFrame:
         raise FrameRejected("geometry", "画面不是单通道灰度图")
     _, bw = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-    geo, rect = bootstrap_geometry(bw)
+    if geo_cache is not None:
+        geo, rect = geo_cache.measure(bw)
+    else:
+        geo, rect = bootstrap_geometry(bw)
     grid_bytes = _sample_grid(bw, geo, rect)
     if len(grid_bytes) < HEADER_BYTES:
         raise FrameRejected("geometry", f"网格容量 {len(grid_bytes)} 字节装不下帧头")

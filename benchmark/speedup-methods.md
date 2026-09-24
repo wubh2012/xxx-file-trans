@@ -22,8 +22,8 @@
 
 benchmark 实测单帧 ≈ `3.7ms 固定 + 7.6ns/px`。解码 44–239fps 对 FPS≤30 余量充足，但 **4K 屏（外推 67ms/帧 → 15fps）会翻转瓶颈**，重传场景压力也按帧数放大。
 
-- **C1 角标检测缓存**：几何自举的 `connectedComponentsWithStats` 是 O(像素)，但帧间几何不变——只在首帧/画面尺寸变化时全量检测，后续帧只做角标位置的轻量校验（校验失败再回退全量）。预计砍掉固定耗时的大头。
-- **C2 局部采样替代全图 boxFilter**：`receiver/pipeline.py` `_sample_grid` 现在对整图做 k×k boxFilter，但实际只需要 ~1.4 万个格心的中位数——改成按格心取局部邻域，复杂度 O(像素) → O(格心×25)，BIT=8 时约省 70×。
+- **C1 角标检测缓存**（已落地，issue #30）：几何自举的 `connectedComponentsWithStats` 是 O(像素)，但帧间几何不变——只在首帧/轻量校验失败时全量检测，后续帧只做角标位置的轻量校验（四角标位置应为实心白，失败回退全量）。
+- **C2 局部采样替代全图 boxFilter**（已落地，issue #30）：`receiver/pipeline.py` `_sample_grid` 改为按格心取局部 k×k 邻域求均值（索引越界复制边缘，与原 BORDER_REPLICATE 等价），复杂度 O(像素) → O(格心×25)，BIT=8 时约省 70×。两项合计：792×456 BIT=4 实测 2.98 → 1.47 ms/帧（2.03×）。
 - C3 采集/解码流水线化（生产者-消费者），images/desktop 源通用。
 
 ## 四、减少重传代价（单向信道的结构性问题）
