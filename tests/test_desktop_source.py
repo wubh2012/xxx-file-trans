@@ -201,8 +201,9 @@ def test_cli_desktop_dispatch_passes_region(monkeypatch):
 
     seen = {}
 
-    def fake_iter_desktop(region=None):
+    def fake_iter_desktop(region=None, backend="mss"):
         seen["region"] = region
+        seen["backend"] = backend
         yield "desktop-000001", np.zeros((10, 10), np.uint8)  # 首帧正常进入循环
         raise KeyboardInterrupt  # 模拟接收中 Ctrl+C（真实生成器异常在迭代中发生）
 
@@ -210,6 +211,12 @@ def test_cli_desktop_dispatch_passes_region(monkeypatch):
     rc = main(["receive", "--source", "desktop", "--region", "15,25,320,240"])
     assert rc == 1
     assert seen["region"] == {"left": 15, "top": 25, "width": 320, "height": 240}
+    assert seen["backend"] == "mss"  # 缺省后端不变（issue #31 B2）
+
+    seen.clear()
+    main(["receive", "--source", "desktop", "--region", "15,25,320,240",
+          "--capture", "dxgi"])
+    assert seen["backend"] == "dxgi"  # --capture 直通 iter_desktop
 
 
 # ---------- --region pick（issue #22）：CLI 进程内 + pick_region 注入替身 ----------
@@ -221,7 +228,7 @@ def test_cli_pick_dispatch_passes_region_and_echoes(monkeypatch, capsys):
 
     seen = {}
 
-    def fake_iter_desktop(region=None):
+    def fake_iter_desktop(region=None, backend="mss"):
         seen["region"] = region
         yield "desktop-000001", np.zeros((10, 10), np.uint8)
         raise KeyboardInterrupt  # 框选后 Ctrl+C 中止（真实生成器异常在迭代中发生）
@@ -259,7 +266,7 @@ def test_cli_calibrate_pick_dispatch(monkeypatch, capsys):
 
     seen = {}
 
-    def fake_iter_desktop(region=None):
+    def fake_iter_desktop(region=None, backend="mss"):
         seen["region"] = region
         raise KeyboardInterrupt  # 未产出画面 → 无帧可统计（生成器异常在迭代时发生）
         yield  # 不可达：仅使本函数成为生成器，与真实 desktop 源一致

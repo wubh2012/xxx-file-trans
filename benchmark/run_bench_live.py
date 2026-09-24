@@ -54,6 +54,7 @@ from receiver.calibrate import run_calibration  # noqa: E402
 from receiver.pipeline import FrameRejected, decode_frame  # noqa: E402
 from receiver.run import run_receive  # noqa: E402
 from receiver.sources.desktop import iter_desktop  # noqa: E402  # 导入即声明 DPI 感知
+from receiver.sources.desktop import _dxgi_capture, _mss_capture  # noqa: E402
 
 # ---------- 基准参数（单变量扫 FPS，其余固定） ----------
 # 冒烟实测（2026-09-24）：FPS 30/60 时实收节拍仅 5.75/0.2 fps（稳定闸门两帧
@@ -137,23 +138,24 @@ def compute_region(page) -> tuple[dict, float]:
     return {"left": left, "top": top, "width": width, "height": height}, dpr
 
 
-def grab_region_gray(region: dict) -> np.ndarray:
-    """抓一帧区域灰度图（自检用；采集主循环走 iter_desktop）。"""
-    import mss
-    with mss.mss() as sct:
-        shot = sct.grab(region)
-        return cv2.cvtColor(np.asarray(shot), cv2.COLOR_BGRA2GRAY)
+def capture_generator(region: dict, backend: str):
+    """按后端产出原始抓屏生成器（对准自检用；采集主循环走 iter_desktop）。"""
+    return _dxgi_capture(region) if backend == "dxgi" else _mss_capture(region)
 
 
-def alignment_selfcheck(region: dict, tries: int = 20) -> bool:
+def alignment_selfcheck(region: dict, backend: str = "mss", tries: int = 20) -> bool:
     """区域对准自检：连抓若干帧，任一帧完整解码（数据/元数据帧皆可）即通过。"""
-    for _ in range(tries):
-        try:
-            decode_frame(grab_region_gray(region))
-            return True
-        except FrameRejected:
-            time.sleep(0.25)
-    return False
+    gen = capture_generator(region, backend)
+    try:
+        for _ in range(tries):
+            try:
+                decode_frame(next(gen))
+                return True
+            except (FrameRejected, StopIteration):
+                time.sleep(0.25)
+        return False
+    finally:
+        gen.close()
 
 
 def frames_with_deadline(gen, deadline: float):
@@ -165,13 +167,14 @@ def frames_with_deadline(gen, deadline: float):
             return
 
 
-def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict) -> None:
-    """接收线程主体：结果与拒帧计数写入 box（线程内启动 mss，随循环播放
+def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
+                   backend: str = "mss") -> None:
+    """接收线程主体：结果与拒帧计数写入 box（线程内启动采集，随循环播放
     收齐后自然结束；file_id 每轮唯一，滞留不串轮）。"""
     rep = LiveReporter()
     box["reporter"] = rep
     t0 = time.perf_counter()
-    result = run_receive(iter_desktop(region=region), out_dir,
+    result = run_receive(iter_desktop(region=region, backend=backend), out_dir,
                          reporter_factory=lambda: rep, notify=None)
     box["result"] = result
     box["worker_s"] = time.perf_counter() - t0
@@ -223,9 +226,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--quick", action="store_true",
                     help="冒烟：1MiB × FPS {30,60} × 1 次接收 × 1 轮校准")
+    ap.add_argument("--capture", choices=["mss", "dxgi"], default="mss",
+                    help="desktop 采集后端（B2 复测用 dxgi；默认 mss 与 v2 报告同口径）")
+    ap.add_argument("--fps-list", default=None,
+                    help="逗号分隔 FPS 档位覆盖（如 15,20,30,45,60）")
     args = ap.parse_args()
     if args.quick:
         FPS_LIST, SIZE_MIB, REPS, CALIB_CYCLES = [30, 60], 1, 1, 1
+    if args.fps_list:
+        FPS_LIST = [int(x) for x in args.fps_list.split(",")]
+    capture = args.capture
+    suffix = "" if capture == "mss" else f"_{capture}"
+    results_json = RESULTS_DIR / f"live_desktop_results{suffix}.json"
+    results_csv = RESULTS_DIR / f"live_desktop_results{suffix}.csv"
 
     from playwright.sync_api import sync_playwright
 
@@ -278,7 +291,7 @@ def main() -> int:
                   f"数据帧 {geo['total']}，理论循环 {cycle_s:.1f}s，dpr={dpr}",
                   flush=True)
 
-            if not alignment_selfcheck(region):
+            if not alignment_selfcheck(region, backend=capture):
                 raise RuntimeError("抓屏区域自检失败：20 次捕获无一完整解码，"
                                    "检查窗口遮挡 / 坐标换算")
             print("  抓屏对准自检通过", flush=True)
@@ -286,7 +299,7 @@ def main() -> int:
             # calibrate：抓 CALIB_CYCLES 轮 + 宽限，deadline 干净收尾判级
             calib_s = CALIB_CYCLES * cycle_s + GRACE_S
             report = run_calibration(
-                frames_with_deadline(iter_desktop(region=region),
+                frames_with_deadline(iter_desktop(region=region, backend=capture),
                                      time.perf_counter() + calib_s))
             fps_stat = report.get("measuredFps")
             calibs.append({"fps": fps, "calib_s": round(calib_s, 1),
@@ -316,9 +329,10 @@ def main() -> int:
                 box: dict = {}
                 th = threading.Thread(target=receive_worker,
                                       args=(region, out_dir, raw, box),
+                                      kwargs={"backend": capture},
                                       daemon=True)
                 th.start()
-                time.sleep(0.3)                   # 接收端就位（mss 打开）
+                time.sleep(0.3)                   # 接收端就位（采集器打开）
                 t0 = time.perf_counter()
                 load_and_play(page, raw_path, fps)
                 page.bring_to_front()
@@ -357,6 +371,7 @@ def main() -> int:
     meta = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "live-desktop",
+        "capture": capture,
         "fps_list": FPS_LIST, "size_mib": SIZE_MIB, "reps": REPS,
         "calib_cycles": CALIB_CYCLES, "bit_css": BIT_CSS, "pad": PAD,
         "window": list(WINDOW_SIZE), "region_pad_dip": REGION_PAD_DIP,
@@ -365,11 +380,11 @@ def main() -> int:
                 "一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；"
                 "缺帧/实测到达 FPS 为 calibrate 口径（issue #29）",
     }
-    (RESULTS_DIR / "live_desktop_results.json").write_text(
+    (results_json).write_text(
         json.dumps({"meta": meta, "calibrations": calibs, "runs": runs},
                    ensure_ascii=False, indent=2), encoding="utf-8")
 
-    with (RESULTS_DIR / "live_desktop_results.csv").open(
+    with (results_csv).open(
             "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["fps", "rep", "size_mib", "cycle_s", "wall_s", "elapsed_s",
@@ -380,7 +395,7 @@ def main() -> int:
                             tier["cycle_s"], r.get("wall_s"), r.get("elapsed_s"),
                             r.get("received"), r.get("total"), r.get("rejected"),
                             r.get("sha_ok"), r.get("failed")])
-    print(f"\n结果已写入 {RESULTS_DIR / 'live_desktop_results.json'} 与 .csv")
+    print(f"\n结果已写入 {results_json} 与 {results_csv.name}")
     return 0
 
 

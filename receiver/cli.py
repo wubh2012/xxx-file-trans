@@ -87,6 +87,9 @@ def _add_source_args(p) -> None:
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
+    p.add_argument("--capture", choices=["mss", "dxgi"], default="mss",
+                   help="desktop 源采集后端：mss 全屏拷贝（默认）或 dxgi "
+                        "Desktop Duplication（B2，低延迟静屏零拷贝；region 以主输出为基准）")
 
 
 def _desktop_region(parser, args) -> dict | None:
@@ -117,7 +120,7 @@ def _frames_or_error(parser, args):
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
         return iter_source("images", args.dir)
     if args.source == "desktop":
-        return iter_desktop(region=_desktop_region(parser, args))
+        return iter_desktop(region=_desktop_region(parser, args), backend=args.capture)
     # video（#10）：缺参用法错误；打不开的报错见调用方
     if not args.video:
         parser.error("--source video 需要 --video <录制视频文件>")
