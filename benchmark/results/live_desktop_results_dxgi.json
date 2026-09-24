@@ -1,0 +1,549 @@
+{
+  "meta": {
+    "generated_at": "2026-09-24T17:28:23.799624+00:00",
+    "mode": "live-desktop",
+    "capture": "dxgi",
+    "fps_list": [
+      15,
+      20,
+      30,
+      45,
+      60
+    ],
+    "size_mib": 5,
+    "reps": 3,
+    "calib_cycles": 1,
+    "bit_css": 8,
+    "pad": 4,
+    "window": [
+      1536,
+      816
+    ],
+    "window_pos": [
+      0,
+      0
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）；FPS 45/60 为滞留线程单例互抢修复后（bench be62891）的补测口径"
+  },
+  "calibrations": [
+    {
+      "fps": 15,
+      "calib_s": 258.9,
+      "measuredFps": {
+        "median": 14.3,
+        "p5": 12.4,
+        "p95": 16.9
+      },
+      "report": {
+        "frames": 3715,
+        "decoded": 3715,
+        "decodeRate": 1.0,
+        "crcReached": 3715,
+        "crcPassed": 3715,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 3715,
+        "measuredBit": 10,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 10,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x9E266B5A",
+            "totalFrames": 3696,
+            "received": 3679,
+            "unique": 3679,
+            "missing": 17,
+            "missingRate": 0.0045995670995671,
+            "duplicates": 0,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 14.3,
+          "p5": 12.4,
+          "p95": 16.9
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 17/3696（0.5%）：边缘，建议降一档复测"
+    },
+    {
+      "fps": 20,
+      "calib_s": 196.7,
+      "measuredFps": {
+        "median": 18.77,
+        "p5": 15.94,
+        "p95": 21.21
+      },
+      "report": {
+        "frames": 3604,
+        "decoded": 3604,
+        "decodeRate": 1.0,
+        "crcReached": 3604,
+        "crcPassed": 3604,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 3604,
+        "measuredBit": 10,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 10,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x734CCA8A",
+            "totalFrames": 3696,
+            "received": 3569,
+            "unique": 3569,
+            "missing": 127,
+            "missingRate": 0.034361471861471864,
+            "duplicates": 0,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 18.77,
+          "p5": 15.94,
+          "p95": 21.21
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 127/3696（3.4%）：显著，建议降档"
+    },
+    {
+      "fps": 30,
+      "calib_s": 134.4,
+      "measuredFps": {
+        "median": 26.01,
+        "p5": 23.17,
+        "p95": 36.96
+      },
+      "report": {
+        "frames": 3695,
+        "decoded": 3695,
+        "decodeRate": 1.0,
+        "crcReached": 3695,
+        "crcPassed": 3695,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 3695,
+        "measuredBit": 10,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 10,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x218AC6CA",
+            "totalFrames": 3696,
+            "received": 3659,
+            "unique": 3659,
+            "missing": 37,
+            "missingRate": 0.01001082251082251,
+            "duplicates": 0,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 26.01,
+          "p5": 23.17,
+          "p95": 36.96
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 37/3696（1.0%）：显著，建议降档"
+    },
+    {
+      "fps": 45,
+      "calib_s": 93.0,
+      "measuredFps": {
+        "median": 32.74,
+        "p5": 20.95,
+        "p95": 42.13
+      },
+      "report": {
+        "frames": 2636,
+        "decoded": 2636,
+        "decodeRate": 1.0,
+        "crcReached": 2636,
+        "crcPassed": 2636,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 2636,
+        "measuredBit": 10,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 10,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x7552BFA3",
+            "totalFrames": 3696,
+            "received": 2608,
+            "unique": 2574,
+            "missing": 1122,
+            "missingRate": 0.30357142857142855,
+            "duplicates": 34,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 32.74,
+          "p5": 20.95,
+          "p95": 42.13
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 1122/3696（30.4%）：显著，建议降档"
+    },
+    {
+      "fps": 60,
+      "calib_s": 72.2,
+      "measuredFps": {
+        "median": 23.97,
+        "p5": 13.86,
+        "p95": 37.23
+      },
+      "report": {
+        "frames": 1683,
+        "decoded": 1683,
+        "decodeRate": 1.0,
+        "crcReached": 1683,
+        "crcPassed": 1683,
+        "crcRate": 1.0,
+        "rejected": {},
+        "probed": 1683,
+        "measuredBit": 10,
+        "measuredPad": 4,
+        "residualPx": 0,
+        "BIT": 10,
+        "PAD": 4,
+        "transfers": [
+          {
+            "fileId": "0x1E78D379",
+            "totalFrames": 3696,
+            "received": 1669,
+            "unique": 1627,
+            "missing": 2069,
+            "missingRate": 0.5597943722943723,
+            "duplicates": 42,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 23.97,
+          "p5": 13.86,
+          "p95": 37.23
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 2069/3696（56.0%）：显著，建议降档"
+    }
+  ],
+  "runs": [
+    {
+      "fps": 15,
+      "geo": {
+        "fps": 15,
+        "bit": 10,
+        "cols": 170,
+        "rows": 68,
+        "chunk": 1419,
+        "total": 3696
+      },
+      "cycle_s": 248.9,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 89,
+        "width": 1920,
+        "height": 960
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 260.202,
+          "elapsed_s": 259.971,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 260.211,
+          "elapsed_s": 259.982,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 15,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 260.032,
+          "elapsed_s": 259.807,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 20,
+      "geo": {
+        "fps": 20,
+        "bit": 10,
+        "cols": 170,
+        "rows": 68,
+        "chunk": 1419,
+        "total": 3696
+      },
+      "cycle_s": 186.7,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 89,
+        "width": 1920,
+        "height": 960
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 203.745,
+          "elapsed_s": 203.526,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 203.733,
+          "elapsed_s": 203.516,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 3,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 20,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 203.742,
+          "elapsed_s": 203.536,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 30,
+      "geo": {
+        "fps": 30,
+        "bit": 10,
+        "cols": 170,
+        "rows": 68,
+        "chunk": 1419,
+        "total": 3696
+      },
+      "cycle_s": 124.4,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 89,
+        "width": 1920,
+        "height": 960
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 135.88,
+          "elapsed_s": 135.681,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 135.887,
+          "elapsed_s": 135.691,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 30,
+          "size_mib": 5,
+          "failed": false,
+          "wall_s": 135.881,
+          "elapsed_s": 135.684,
+          "received": 3696,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 45,
+      "geo": {
+        "fps": 45,
+        "bit": 10,
+        "cols": 170,
+        "rows": 68,
+        "chunk": 1419,
+        "total": 3696
+      },
+      "cycle_s": 83.0,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 89,
+        "width": 1920,
+        "height": 960
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 45,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 517.986,
+          "elapsed_s": 0.0,
+          "received": 3690,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 45,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 517.978,
+          "elapsed_s": 0.0,
+          "received": 3685,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 45,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 517.985,
+          "elapsed_s": 0.0,
+          "received": 3688,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "fps": 60,
+      "geo": {
+        "fps": 60,
+        "bit": 10,
+        "cols": 170,
+        "rows": 68,
+        "chunk": 1419,
+        "total": 3696
+      },
+      "cycle_s": 62.2,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 89,
+        "width": 1920,
+        "height": 960
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 60,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 394.781,
+          "elapsed_s": 0.0,
+          "received": 3538,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        },
+        {
+          "rep": 1,
+          "fps": 60,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 394.783,
+          "elapsed_s": 0.0,
+          "received": 3551,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        },
+        {
+          "rep": 2,
+          "fps": 60,
+          "size_mib": 5,
+          "failed": true,
+          "wall_s": 394.783,
+          "elapsed_s": 0.0,
+          "received": 3547,
+          "total": 3696,
+          "rejected": 2,
+          "sha_ok": false,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

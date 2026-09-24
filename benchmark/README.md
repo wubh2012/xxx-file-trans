@@ -51,6 +51,9 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
 
 # 冒烟（3–5 分钟，验链路）
 .venv/Scripts/python.exe benchmark/run_bench_live.py --quick
+
+# B2 复测口径：dxgi 采集 + 自定义档位（结果写 *_dxgi.json/.csv）
+.venv/Scripts/python.exe benchmark/run_bench_live.py --capture dxgi --fps-list 15,20,30,45,60
 ```
 
 > FPS 档位说明：原计划扫 {30,45,60} 检验 B1 上限，冒烟实测 30/60 时实收节拍仅
@@ -61,6 +64,15 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
 **运行期间屏幕上会出现一个置顶浏览器窗口循环播放方块帧，请勿遮挡**——
 抓屏采的是真实屏幕像素，遮挡即坏帧。产出 `live_desktop_results.json` / `.csv`
 与 `report-live.md`。
+
+### B2 复测（C1+C2+B2 落地后，issue #31）
+
+2026-09-25 用 `--capture dxgi` 复测 {15,20,30,45,60}：实投安全上限
+**15 → 30（翻倍）**，30fps 档 3 rep 全 OK（wall 135.9s ≈ 2.2 MiB/min）；
+45/60 超出「抓屏 + 稳定闸门 + 解码」串行周期（~30–35ms）决定的 ~30fps
+吞吐天花板，失败形态为几何尾部收不齐（差 6–11 帧 / 145+ 帧）。详见
+[report-live.md 的 B2 复测章节](report-live.md)。数据：
+`live_desktop_results_dxgi.json` / `.csv`。
 
 关键口径：
 
