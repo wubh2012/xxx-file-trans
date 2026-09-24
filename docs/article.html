@@ -1,0 +1,330 @@
+<meta charset="utf-8">
+<title>空气摆渡</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#F5F6F2;
+  --ink:#1B1E1C;
+  --muted:#5D645E;
+  --line:#DFE2D8;
+  --accent:#B23A28;
+  --accent-soft:#F0E4E0;
+  --panel:#0F1210;
+  --panel-edge:#2A2F2B;
+  --cell-on:#F0F2EA;
+  --cell-dim:#161A17;
+  --serif:'Noto Serif SC',serif;
+  --sans:'Noto Sans SC',sans-serif;
+  --mono:'IBM Plex Mono',monospace;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.95;
+}
+.wrap{max-width:720px;margin:0 auto;padding:0 24px}
+.wide{max-width:880px}
+
+/* ---------- 眉题 ---------- */
+.eyebrow{
+  display:flex;align-items:center;gap:10px;
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.22em;
+  color:var(--accent);margin:0 0 18px;
+}
+.eyebrow::before{
+  content:"";width:12px;height:12px;flex:none;
+  background:conic-gradient(var(--ink) 25%,transparent 0 50%,var(--ink) 0 75%,transparent 0);
+}
+
+/* ---------- 头部 ---------- */
+header{padding:76px 0 44px}
+h1{
+  font-family:var(--serif);font-weight:900;
+  font-size:clamp(34px,5.4vw,52px);
+  line-height:1.28;margin:0 0 22px;
+  text-wrap:balance;letter-spacing:.01em;
+}
+.lede{font-size:17.5px;color:var(--muted);max-width:36em;margin:0}
+
+/* ---------- 发送屏幕面板 ---------- */
+.monitor{
+  background:var(--panel);
+  border:1px solid var(--panel-edge);
+  border-radius:6px;
+  padding:20px 20px 14px;
+  margin:44px auto 0;
+}
+.monitor canvas{display:block;width:100%;height:auto}
+.mrow{
+  display:flex;justify-content:space-between;align-items:baseline;
+  margin-top:12px;font-family:var(--mono);font-size:11.5px;
+  letter-spacing:.14em;color:#8A918B;
+}
+.mrow .ok{color:var(--cell-on)}
+.mrow .ok::before{content:"● ";font-size:9px;vertical-align:2px}
+.checker{
+  height:14px;width:120px;margin:36px auto 0;
+  background:conic-gradient(var(--ink) 25%,transparent 0 50%,var(--ink) 0 75%,transparent 0);
+  background-size:7px 7px;opacity:.75;
+}
+
+/* ---------- 正文 ---------- */
+section{margin-top:76px}
+h2{
+  font-family:var(--serif);font-weight:700;
+  font-size:clamp(24px,3.4vw,30px);
+  line-height:1.4;margin:0 0 6px;text-wrap:balance;
+}
+section p{margin:16px 0}
+.muted{color:var(--muted)}
+strong{font-weight:700}
+.hl{color:var(--accent);font-weight:700}
+
+ul.plain{list-style:none;padding:0;margin:18px 0}
+ul.plain li{padding-left:26px;position:relative;margin:12px 0}
+ul.plain li::before{
+  content:"";position:absolute;left:2px;top:.85em;
+  width:10px;height:10px;
+  background:conic-gradient(var(--accent) 25%,transparent 0 50%,var(--accent) 0 75%,transparent 0);
+}
+ul.plain b{font-weight:700}
+
+/* 引语 */
+.pull{
+  font-family:var(--serif);font-weight:700;font-size:21px;line-height:1.7;
+  border-left:3px solid var(--accent);
+  padding:6px 0 6px 20px;margin:34px 0;
+  text-wrap:balance;
+}
+
+/* 数据条 */
+.stats{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);
+  margin:38px 0;
+}
+.stat{padding:18px 16px 16px;border-left:1px solid var(--line)}
+.stat:first-child{border-left:none;padding-left:2px}
+.stat .n{font-family:var(--mono);font-size:24px;font-weight:500;letter-spacing:-.01em}
+.stat .c{font-size:12.5px;color:var(--muted);line-height:1.6;margin-top:2px}
+
+/* 对比表 */
+.tablewrap{overflow-x:auto;margin:30px 0}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:14.5px;line-height:1.7}
+th{
+  font-family:var(--mono);font-weight:500;font-size:12px;letter-spacing:.1em;
+  text-align:left;color:var(--muted);
+  border-bottom:2px solid var(--ink);padding:10px 12px;
+}
+th:first-child{width:8em}
+td{border-bottom:1px solid var(--line);padding:12px;vertical-align:top}
+td:first-child{font-weight:700;color:var(--muted)}
+td .win{color:var(--accent);font-weight:700}
+
+/* 结尾 */
+.closing{
+  margin-top:84px;padding-top:44px;border-top:1px solid var(--ink);
+  display:flex;justify-content:space-between;align-items:flex-end;gap:32px;flex-wrap:wrap;
+}
+.closing .end{font-family:var(--serif);font-weight:700;font-size:22px;line-height:1.7;max-width:20em;margin:0}
+.seal{
+  flex:none;width:72px;height:72px;border:2.5px solid var(--accent);
+  border-radius:4px;display:grid;place-items:center;
+  color:var(--accent);font-family:var(--serif);font-weight:900;font-size:22px;
+  letter-spacing:2px;writing-mode:vertical-rl;
+  transform:rotate(-4deg);opacity:.92;
+}
+footer{
+  margin:80px 0 64px;padding-top:18px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;color:var(--muted);
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+@media (prefers-reduced-motion:reduce){.monitor canvas{display:none}}
+</style>
+
+<div class="wrap wide">
+  <header>
+    <div class="wrap" style="padding:0">
+      <p class="eyebrow">产品札记 · 物理隔离网络</p>
+      <h1>没有网线，文件怎么过去？</h1>
+      <p class="lede">介绍一个把显示器变成发报机、把摄像头变成收报机的小项目。它让文件穿过世界上最窄的一条信道——空气。</p>
+    </div>
+    <div class="monitor">
+      <canvas id="grid" aria-label="发送端画面示意：黑白方块阵列正在逐帧变化"></canvas>
+      <div class="mrow"><span>TX · 发送画面</span><span class="ok" id="txstatus">FRAME 0x0001 · CRC OK</span></div>
+    </div>
+    <div class="checker" aria-hidden="true"></div>
+  </header>
+</div>
+
+<div class="wrap">
+
+<section>
+  <p class="eyebrow">一 · 问题</p>
+  <h2>最安全的网络，是不联网的网络</h2>
+  <p>涉密内网、工业控制网、研发隔离区——这些网络都有一个共同点：<strong>物理上断开了与外网的连接</strong>。没有连接，攻击就无从下手。这是安全上的物理天花板，谁也绕不过去。</p>
+  <p>但组织是有呼吸的。代码要送出去评审，报表要递上来汇总，补丁要传进去安装。于是行业里发明了一个词，叫<span class="hl">摆渡</span>：把文件从一张网搬到另一张网，且全程不产生任何网络连接。</p>
+  <p>今天主流的摆渡方式是人工——刻一张光盘，批一个 U 盘，跑一趟审批。流程足够严密，但有三个绕不开的痛点：</p>
+  <ul class="plain">
+    <li><b>慢。</b>审批走半天，拷贝一分钟，时间全花在路上。</li>
+    <li><b>风险在人。</b>U 盘是可写介质：进去的文件可能带毒（震网病毒就是这样进入核设施的），出来的文件可能被夹带。</li>
+    <li><b>不可审计。</b>单据上写了什么不算数，盘里实际装了什么才算数——而盘是黑盒。</li>
+  </ul>
+</section>
+
+<section>
+  <p class="eyebrow">二 · 洞见</p>
+  <h2>一个反直觉的答案：光</h2>
+  <p>两台互不联网的电脑之间，什么信道是<strong>绝对单向</strong>的？答案是空气。</p>
+  <p>屏幕把文件显示成一片黑白方块，摄像头把它拍下来。光从屏幕流进镜头，仅此而已——你没有办法让光从摄像头「流回」屏幕。这条信道在物理层面就不存在回传路径：即使外网的机器被完全攻陷，攻击者也只能「看着」，不能「摸着」。</p>
+  <p class="pull">像烽火台，像旗语，像老电影里军舰用信号灯打摩尔斯电码。人类早就用光传递过最要紧的信息——这个项目只是把信源，换成了文件。</p>
+</section>
+
+<section>
+  <p class="eyebrow">三 · 体验</p>
+  <h2>用起来是什么样？</h2>
+  <p>发送端是<strong>一个网页</strong>：选文件、点开始，屏幕上开始滚动播放黑白方块。接收端是另一台电脑上的一个小程序：用摄像头对着屏幕，或者直接抓取屏幕——也可以只框选屏幕上一块区域。剩下的事它自己完成：识别、校验、拼装、解压，一个完好的文件落盘。摄像头、录屏文件、抓屏、甚至离线的图片序列，都能作为「眼睛」。</p>
+  <p>全程没有一根线，没有任何配对操作。唯一的动作是：<span class="hl">把屏幕摆在镜头面前</span>。</p>
+  <div class="stats">
+    <div class="stat"><div class="n">208 bit</div><div class="c">每一帧数据都带着完整的「信封头」</div></div>
+    <div class="stat"><div class="n">× 2</div><div class="c">两道校验：逐块校验 + 整文件再校验</div></div>
+    <div class="stat"><div class="n">0</div><div class="c">预设参数——两端不商量，一切从画面自己量出来</div></div>
+    <div class="stat"><div class="n">∞</div><div class="c">无限重播，缺哪补哪，中途断开接着收</div></div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">四 · 信任</p>
+  <h2>信道很糟糕，所以设计必须很好</h2>
+  <p>产品经理最该讲的，不是这条信道有多酷，而是它的三个<strong>先天缺陷</strong>——因为产品的可信度，恰恰建立在如何回答它们之上。</p>
+  <p><strong>画面会脏。</strong>反光、抖动、压缩伪影，都会让方块糊掉。回答是：每一小块数据都自带「体检报告」，画面不合格就整块丢弃、宁缺毋滥——<strong>错一个比特都不可能混进文件</strong>。收进来是干净的，比收得快重要得多。</p>
+  <p><strong>没有反馈。</strong>摄像头不会告诉屏幕「我收到了」，这条信道连握手都做不到。回答是：屏幕无限循环重播，接收端默默记账，收到的不重复收，缺的补着收；中途关掉程序再打开，从上次的进度继续。这就是断点续传在一条零反馈信道上的样子。</p>
+  <p><strong>两端素不相识。</strong>事先没约定画面参数怎么办？回答是：根本不约定。所有参数都写在画面里，接收端从第一帧自己量出来。翻译成用户体验只有一句话：<strong>开箱即用，零配置</strong>——不会有人对着两个填不明白的参数框放弃安装。</p>
+</section>
+
+<section>
+  <p class="eyebrow">五 · 场景</p>
+  <h2>谁会需要它？</h2>
+  <ul class="plain">
+    <li><b>做安全评审的研发团队。</b>构建产物从隔离研发网送到测试网，不用为一个小附件跑一趟审批大厅。</li>
+    <li><b>有合规要求的行业。</b>电力、军工、金融的内外网文件交换，天然留下一份「每一块都被校验过」的传输记录。</li>
+    <li><b>家里的极客。</b>两台互不联网的机器想拷个文件，又懒得翻出 U 盘——把一台的屏幕给另一台的摄像头看，就好了。</li>
+  </ul>
+</section>
+
+<section>
+  <p class="eyebrow">六 · 边界</p>
+  <h2>诚实地说：它不解决速度</h2>
+  <p>一屏幕能装的信息量就那么大，它的带宽以「每秒几屏」计。电影、数据集、虚拟机镜像，请走别的路。它适合的是<strong>文档、代码、配置、日志</strong>——那些不大、但必须干净地过去的东西。</p>
+  <p>它卖的不是快，是<strong>可以证明的干净</strong>：每一块有校验，整个文件还有第二道校验，再加上物理层面的单向性。在安全的世界里，「慢而可证明」往往不是妥协——它就是产品本身。</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>光盘 / U 盘 人工摆渡</th><th>屏幕摆渡</th></tr></thead>
+    <tbody>
+      <tr><td>信道</td><td>可写介质，人手搬运</td><td class="win">光，物理单向，不存在回传路径</td></tr>
+      <tr><td>带毒 / 夹带</td><td>介质可被二次写入</td><td class="win">信道只读，无从注入</td></tr>
+      <tr><td>文件可信度</td><td>事后抽检，黑盒</td><td class="win">逐块校验 + 整文件双重校验</td></tr>
+      <tr><td>中断恢复</td><td>推倒重来，重走流程</td><td class="win">自动记账，接着收</td></tr>
+      <tr><td>前置成本</td><td>审批链、专人、介质管理</td><td class="win">一个网页 + 一个小程序</td></tr>
+      <tr><td>大文件</td><td class="win">占优</td><td>以「每秒几屏」计，小文件的战场</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<div class="closing">
+  <p class="end">当网络被物理切断，屏幕就是最后一张网卡。<br>这个项目把它接上了——<span class="hl">用光</span>。</p>
+  <div class="seal">摆渡</div>
+</div>
+
+<footer>
+  <span>空气摆渡 · 单向文件信道</span>
+  <span>SCREEN → LIGHT → FILE</span>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var cv = document.getElementById('grid');
+  var ctx = cv.getContext('2d');
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var COLS = 26, ROWS = 12, PAD = 5;           // 网格 26x12，四周 5 格静默区
+  var W = COLS + PAD * 2, H = ROWS + PAD * 2;  // 画布总格数 36 x 22
+
+  function setup(){
+    var cssW = cv.parentElement.clientWidth - 40; // 减去面板 padding
+    var dpr = window.devicePixelRatio || 1;
+    var bit = cssW / W;
+    cv.width  = Math.round(cssW * dpr);
+    cv.height = Math.round(bit * H * dpr);
+    cv.style.height = (bit * H) + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return bit;
+  }
+
+  function makeBits(){
+    var g = new Uint8Array(COLS * ROWS);
+    for (var i = 0; i < g.length; i++) g[i] = Math.random() < .48 ? 1 : 0;
+    return g;
+  }
+
+  function draw(bit){
+    var w = bit * W, h = bit * H;
+    ctx.fillStyle = '#0F1210';
+    ctx.fillRect(0, 0, w, h);
+    // 静默区微弱纹理
+    ctx.fillStyle = '#131714';
+    ctx.fillRect(bit*2, bit*2, w - bit*4, h - bit*4);
+    // 四角角标：白色方块，边长 3 bit，内角与数据网格外角重合
+    ctx.fillStyle = '#F0F2EA';
+    var s = bit * 3;
+    ctx.fillRect(bit*(PAD-3),        bit*(PAD-3),        s, s);
+    ctx.fillRect(bit*(PAD+COLS),     bit*(PAD-3),        s, s);
+    ctx.fillRect(bit*(PAD-3),        bit*(PAD+ROWS),     s, s);
+    ctx.fillRect(bit*(PAD+COLS),     bit*(PAD+ROWS),     s, s);
+    // 数据网格
+    var g = bits;
+    for (var r = 0; r < ROWS; r++){
+      for (var c = 0; c < COLS; c++){
+        ctx.fillStyle = g[r*COLS+c] ? '#F0F2EA' : '#161A17';
+        ctx.fillRect(bit*(PAD+c), bit*(PAD+r), Math.ceil(bit), Math.ceil(bit));
+      }
+    }
+  }
+
+  var bits = makeBits();
+  var frame = 1, last = 0;
+  var status = document.getElementById('txstatus');
+
+  function pad4(n){ return ('000' + n.toString(16).toUpperCase()).slice(-4); }
+
+  function setStatus(){
+    var ok = Math.random() > .06;
+    status.textContent = 'FRAME 0x' + pad4(frame) + ' · ' + (ok ? 'CRC OK' : 'RETRY');
+    status.style.color = ok ? '' : '#C98A7E';
+  }
+
+  function tick(ts){
+    if (ts - last > 650){
+      last = ts;
+      bits = makeBits();
+      frame = (frame % 4095) + 1;
+      draw(setup());
+      setStatus();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  if (reduce){
+    draw(setup());
+    status.textContent = 'FRAME 0x0F3A · CRC OK';
+  } else {
+    requestAnimationFrame(tick);
+    window.addEventListener('resize', function(){ draw(setup()); });
+  }
+})();
+</script>
