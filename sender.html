@@ -89,7 +89,8 @@
     <legend>发送参数</legend>
     <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）">BIT <input id="bit" type="number" min="1" max="15" value="8"> px/块</label>
     <label title="数据网格四周黑色静默区的宽度，单位为 BIT 像素的倍数。用于隔离画面背景并容纳四角白色角标（角标边长 = 3×BIT，故必须 ≥ 3）。接收端按帧头声明的 PAD 校验，采集画面可任意裁切边距">PAD <input id="pad" type="number" min="3" max="15" value="4"> ×BIT</label>
-    <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传。camera 拍摄建议保守，desktop 抓屏可更高">FPS <input id="fps" type="number" min="1" max="30" value="10"></label>
+    <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传（单向信道丢一帧＝等整个循环重播）。camera 拍摄建议保守；desktop 抓屏可到 60（受刷新率封顶），>30 建议先用接收端 calibrate 实测误帧率（缺帧率 0）再正式传输">FPS <input id="fps" type="number" min="1" max="60" value="10"></label>
+    <span id="fpsWarn" class="hint" hidden>⚠ FPS > 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
     <p class="hint">BIT＝方块边长（px/块，越大越稳但越慢）；PAD＝网格四周黑色静默边（×BIT，容纳角标）；FPS＝每秒帧数（越高越快，拍摄易糊帧）。悬停各参数可看详细说明。</p>
   </fieldset>
   <fieldset>
@@ -194,7 +195,8 @@ function deriveGeometry() {
   if (cols < 1 || rows < 1) throw new Error('静默区参数过大：数据网格放不下');
   if (cols * rows - 208 < 8) throw new Error('数据区容量不足（BIT 过大或屏幕过小）');
   const chunkSize = (cols * rows - 208) / 8;            // 208 bit 帧头之外的整字节容量
-  const fps = clampInt(el('fps').value, 1, 30);
+  const fps = clampInt(el('fps').value, 1, 60);
+  el('fpsWarn').hidden = fps <= 30;   // 高 FPS 护航：>30 提示先 calibrate 实测误帧率（issue #28）
   return { BIT: bit, PAD: pad, COLS: cols, ROWS: rows, FPS: fps, chunkSize };
 }
 
@@ -622,6 +624,10 @@ function updateInfo() {
 const drop = el('drop'), fileInput = el('file');
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+el('fps').addEventListener('input', () => {
+  // 高 FPS 护航实时提示（issue #28）：与 deriveGeometry 同口径钳位后判断
+  el('fpsWarn').hidden = clampInt(el('fps').value, 1, 60) <= 30;
+});
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
