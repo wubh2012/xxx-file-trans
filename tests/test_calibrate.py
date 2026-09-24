@@ -11,6 +11,7 @@ receive 的退出码 1）。
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zlib
@@ -18,6 +19,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 import fixture_encoder
 
@@ -76,6 +78,9 @@ def test_clean_stream_full_rates_and_recommended_params(tmp_path):
     report = last_json(r.stdout)
     assert report["decodeRate"] == 1.0
     assert report["crcRate"] == 1.0
+    # 实测到达 FPS 仅实时源有意义（issue #29）：images 源置 None 不展示
+    assert report["measuredFps"] is None
+    assert "实测到达 FPS" not in r.stdout
     # 回灌发送端：BIT / PAD 与 sender.html 输入项（id=bit / id=pad）同名同界
     assert report["BIT"] == 4
     assert report["PAD"] == 4
@@ -216,3 +221,94 @@ def test_keyboard_interrupt_returns_partial_report():
     assert report["frames"] == 3
     assert report["decodeRate"] == 0.0
     assert report["BIT"] == 0, "无任何可测几何样本时不得虚报推荐参数"
+    assert report["transfers"] == []
+    assert report["measuredFps"] is not None, "到达节拍与解码成败无关，3 帧即可测"
+
+
+# ---------- 缺帧/重复帧统计 + 实测到达 FPS（issue #29）----------
+
+def test_missing_frame_counted_and_graded(tmp_path):
+    """缺帧流：抽掉 1/6 数据帧 → missing=1、缺帧率 16.7% > 1% → 判级
+    「警告：缺帧显著，建议降档」；重复 0、约 1 轮。"""
+    frames, paths = export_stream(
+        tmp_path, os.urandom(1500), filename="gap29.bin", bit=4, pad=4,
+    )
+    paths[2].unlink()  # paths[0] 为元数据帧，paths[2] = 数据帧 1
+
+    r = run_calibrate(frames)
+
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+    report = last_json(r.stdout)
+    assert len(report["transfers"]) == 1
+    t = report["transfers"][0]
+    assert t["totalFrames"] == 6
+    assert t["received"] == 5 and t["unique"] == 5
+    assert t["missing"] == 1 and t["duplicates"] == 0 and t["cycles"] == 1
+    assert t["missingRate"] == pytest.approx(1 / 6)
+    assert "警告：缺帧 1/6（16.7%）显著，建议降档" in r.stdout
+
+
+def test_duplicate_frame_counted_and_clean_verdict(tmp_path):
+    """重复帧流：数据帧 0 复制一份（换名排后）→ duplicates=1、missing=0
+    → 判级「实测干净，可尝试再上一档」（单向信道零容忍下给出双向信号）。"""
+    frames, paths = export_stream(
+        tmp_path, os.urandom(1500), filename="dup29.bin", bit=4, pad=4,
+    )
+    shutil.copyfile(paths[1], frames / "999990.png")  # 数据帧 0 的完整副本
+
+    r = run_calibrate(frames)
+
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+    report = last_json(r.stdout)
+    t = report["transfers"][0]
+    assert t["missing"] == 0 and t["duplicates"] == 1
+    assert t["received"] == t["unique"] + 1
+    assert "缺帧 0：该 FPS 实测干净，可尝试再上一档复测" in r.stdout
+
+
+def test_multi_file_id_grouped(tmp_path):
+    """多 file_id 流：会话中途换文件播放 → 各自成组，主分组 = 接收帧数
+    最多的 file_id，两组互不混淆缺帧口径。"""
+    frames, paths = export_stream(
+        tmp_path, os.urandom(1500), filename="multi29.bin", bit=4, pad=4,
+    )
+    # 换文件：另一 file_id 的 2 帧小传输（几何与主流一致才能解码）
+    other = 0x11223344
+    for frame_no in (0, 1):
+        data = b"x" * 100
+        h = fixture_encoder.signed_header(other, frame_no, 2, data, 262, 48, 48, 4, 4)
+        fixture_encoder.render_png(h, data, 4, 4, frames / f"99999{frame_no}.png")
+
+    r = run_calibrate(frames)
+
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+    report = last_json(r.stdout)
+    assert len(report["transfers"]) == 2
+    main, second = report["transfers"]
+    assert second["fileId"] == "0x11223344"
+    assert second["totalFrames"] == 2 and second["unique"] == 2
+    assert main["received"] >= second["received"], "主分组 = 接收帧数最多"
+    assert main["fileId"] != second["fileId"]
+    assert "传输 0x11223344：数据帧接收 2 次" in r.stdout
+
+
+def test_measured_fps_injected_clock():
+    """单测：实测到达 FPS 用注入时间源——假时钟每帧步进 0.02s → 中位
+    50fps，p5/p95 与中位一致（节拍均匀）；分组与解码成败无关。"""
+    import numpy as np
+
+    from receiver.calibrate import run_calibration
+
+    ticks = iter(range(1, 100))
+
+    def frames():
+        for i in range(5):
+            yield f"{i:06d}.png", np.zeros((10, 10), dtype=np.uint8)
+
+    report = run_calibration(frames(), clock=lambda: next(ticks) * 0.02)
+
+    fps = report["measuredFps"]
+    assert fps["median"] == pytest.approx(50.0)
+    assert fps["p5"] == pytest.approx(50.0)
+    assert fps["p95"] == pytest.approx(50.0)
+    assert report["transfers"] == []

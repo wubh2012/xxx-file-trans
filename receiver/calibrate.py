@@ -18,13 +18,24 @@
 - PAD 以帧头声明为准（裁切下几何不可测，#22），推荐 = 实测帧头多数值
   （钳到冻结下限 3）。
 - 输出末行 JSON：BIT / PAD 与 sender.html 输入项（id=bit / id=pad）同名，
-  可直接回灌发送端。FPS 不在推荐之列：画面统计不出帧率依据，不虚报。
+  可直接回灌发送端。FPS 不在推荐之列（不虚报推荐值）；issue #29 新增
+  实测到达 FPS（采集端实收节拍）与按 file_id 归组的缺帧/重复帧统计、
+  缺帧三级提示，供操作者「逐档试到出现缺帧再退一档」自己定档。
+
+缺帧/重复帧口径（issue #29）：循环播放流按 file_id 归组，数据帧
+（元数据帧哨兵不参与）去重——unique = 去重后收到的帧号数，
+missing = total_frames − unique（CRC 拒帧帧号不可信，天然计入 missing），
+duplicates = received − unique（第 2 轮起每帧皆重复）。实测到达 FPS =
+帧到达间隔的倒数分布（中位数抗 stable gate 强制解码超时的偶发抖动），
+仅对实时源（desktop/video）有意义，images 源由 CLI 置 None 不展示。
 """
+
+import time
+from collections import Counter
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
-from collections import Counter
-from dataclasses import dataclass, field
 
 from receiver.pipeline import (
     DecodedFrame,
@@ -32,6 +43,7 @@ from receiver.pipeline import (
     decode_frame,
     measure_geometry,
 )
+from receiver.protocol import FRAME_NO_METADATA
 
 
 @dataclass
@@ -133,6 +145,65 @@ def min_safe_bit(delta_px: int) -> int:
     return 15
 
 
+@dataclass
+class TransferGroup:
+    """按 file_id 归组的缺帧/重复帧统计（issue #29，口径见模块 docstring）。
+
+    total_frames 来自本组数据帧帧头（CRC 覆盖，帧间一致）；同一 calibrate
+    会话内换文件播放时各自成组互不混淆。"""
+
+    file_id: int
+    total_frames: int = 0
+    received: int = 0
+    seen: set = field(default_factory=set)  # 去重后的数据帧号
+
+    @property
+    def missing(self) -> int:
+        """缺帧数：CRC 拒帧帧号不可信、画面整帧丢失不出现，均天然计入。"""
+        return self.total_frames - len(self.seen)
+
+    @property
+    def duplicates(self) -> int:
+        """重复帧数：循环播放第 2 轮起每帧皆重复。"""
+        return self.received - len(self.seen)
+
+    @property
+    def cycles(self) -> int:
+        """捕获完整轮数下限：duplicates ÷ total + 1（不满一轮的重复不进位）。"""
+        return self.duplicates // self.total_frames + 1 if self.total_frames else 1
+
+
+def group_report(group: TransferGroup) -> dict:
+    """单分组统计 → JSON 字段（fileId 十六进制字符串便于人读比对帧头）。"""
+    rate = group.missing / group.total_frames if group.total_frames else 0.0
+    return {
+        "fileId": f"0x{group.file_id:08X}",
+        "totalFrames": group.total_frames,
+        "received": group.received,
+        "unique": len(group.seen),
+        "missing": group.missing,
+        "missingRate": rate,
+        "duplicates": group.duplicates,
+        "cycles": group.cycles,
+    }
+
+
+def fps_stats(intervals: list[float]) -> dict | None:
+    """实测到达 FPS（issue #29）：帧到达间隔倒数分布的中位数 + p5/p95。
+
+    中位数抗 stable gate 强制解码超时等偶发抖动；分位数供判断节拍是否
+    均匀（p5 远低于中位 = 节拍不稳）。样本 <2 或全零间隔不可测（None）。
+    """
+    if len(intervals) < 2:
+        return None
+    fps = 1.0 / np.asarray([dt for dt in intervals if dt > 0], dtype=float)
+    if fps.size == 0:
+        return None
+    p5, med, p95 = np.percentile(fps, [5, 50, 95])
+    return {"median": round(float(med), 2), "p5": round(float(p5), 2),
+            "p95": round(float(p95), 2)}
+
+
 def build_report(stats: CalibrationStats, samples: list[GeometrySample],
                  decoded: list[DecodedFrame]) -> dict:
     """统计结果 + 推荐参数（规则见模块 docstring）。空流返回零报告，
@@ -185,20 +256,61 @@ def format_report(report: dict) -> str:
             f"警告：实测 ±{report['residualPx']}px 级角标测量偏差，小 BIT 时"
             "采样窗口易越界（CRC 拒帧）；推荐 BIT 为采样鲁棒性下限（ADR-0001）"
         )
+    # 缺帧/重复帧 + 实测到达 FPS（issue #29）：分组行全列，判级只看主分组
+    transfers = report.get("transfers") or []
+    for t in transfers:
+        lines.append(
+            f"传输 {t['fileId']}：数据帧接收 {t['received']} 次 / 去重 {t['unique']}"
+            f" / 缺 {t['missing']} / 重复 {t['duplicates']}（约 {t['cycles']} 轮）"
+        )
+    fps = report.get("measuredFps")
+    if fps:
+        lines.append(
+            f"实测到达 FPS：中位 {fps['median']:.1f}（p5 {fps['p5']:.1f} / "
+            f"p95 {fps['p95']:.1f}）——采集端实收节拍，仅实时源有意义"
+        )
+    if transfers:
+        if report.get("interrupted"):
+            lines.append("统计中断：缺帧数含未采集部分，不作为 FPS 判级依据")
+        else:
+            t = transfers[0]  # 接收帧数最多的分组为主分组
+            if t["totalFrames"] and t["missing"] == 0:
+                lines.append("缺帧 0：该 FPS 实测干净，可尝试再上一档复测")
+            elif t["totalFrames"] and t["missingRate"] <= 0.01:
+                lines.append(
+                    f"缺帧 {t['missing']}/{t['totalFrames']}"
+                    f"（{t['missingRate']:.1%}）：边缘，建议降一档复测"
+                )
+            elif t["totalFrames"]:
+                lines.append(
+                    f"警告：缺帧 {t['missing']}/{t['totalFrames']}"
+                    f"（{t['missingRate']:.1%}）显著，建议降档"
+                )
     return "\n".join(lines)
 
 
-def run_calibration(frames) -> dict:
+def run_calibration(frames, clock=time.monotonic) -> dict:
     """帧迭代器 → 统计报告 dict（含推荐参数，字段见 build_report）。
+
+    clock 为帧到达时间源（issue #29 实测到达 FPS 用，默认单调时钟，测试
+    可注入假时钟）。缺帧/重复帧按 file_id 归组统计（口径见模块 docstring），
+    报告 transfers 按接收帧数降序（首个为主分组）。
 
     Ctrl+C（desktop 等无限源）不丢弃已统计帧：中断时返回部分报告，
     report['interrupted'] = True。"""
     stats = CalibrationStats()
     decoded: list[DecodedFrame] = []
     samples: list[GeometrySample] = []
+    groups: dict[int, TransferGroup] = {}
+    intervals: list[float] = []
+    prev: float | None = None
     interrupted = False
     try:
         for _name, img in frames:
+            now = clock()
+            if prev is not None:
+                intervals.append(now - prev)
+            prev = now
             try:
                 outcome = decode_frame(img)
             except FrameRejected as e:
@@ -209,6 +321,14 @@ def run_calibration(frames) -> dict:
                 # 通过帧边长必为 3×BIT（冻结校验），残差记 0；探针只测被拒帧
                 samples.append(GeometrySample(bit=outcome.header.bit,
                                               pad=outcome.header.pad, residual=0))
+                # 数据帧归组（元数据帧哨兵不参与，issue #29）；total_frames
+                # 由帧头 CRC 保证帧间一致，逐帧覆盖即锚定
+                if outcome.header.frame_no != FRAME_NO_METADATA:
+                    g = groups.setdefault(outcome.header.file_id,
+                                          TransferGroup(outcome.header.file_id))
+                    g.total_frames = outcome.header.total_frames
+                    g.received += 1
+                    g.seen.add(outcome.header.frame_no)
             else:
                 sample = probe_frame(img)
                 if sample is not None:
@@ -216,5 +336,8 @@ def run_calibration(frames) -> dict:
     except KeyboardInterrupt:
         interrupted = True
     report = build_report(stats, samples, decoded)
+    report["transfers"] = [group_report(g) for g in
+                           sorted(groups.values(), key=lambda g: -g.received)]
+    report["measuredFps"] = fps_stats(intervals)
     report["interrupted"] = interrupted
     return report

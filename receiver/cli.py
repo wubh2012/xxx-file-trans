@@ -64,8 +64,13 @@ def calibrate_frames(args, frames) -> int:
     """calibrate 统计模式（issue #11）：只统计不还原——不写还原文件、
     不建任务目录，缺帧不影响统计完成。输出人读摘要 + 末行 JSON
     （推荐参数 BIT/PAD，回灌发送端）。Ctrl+C（desktop 等无限源）时
-    输出已统计部分——采样边界由操作者掌握。"""
+    输出已统计部分——采样边界由操作者掌握。
+
+    实测到达 FPS 仅对实时源有意义（issue #29）：images 源的磁盘读图
+    速度不是传输节拍，JSON 置 None、人读报告不显示，避免假信号。"""
     report = run_calibration(frames)
+    if args.source == "images":
+        report["measuredFps"] = None
     if report["frames"] == 0:
         print("无帧可统计：取帧源未产出任何画面", file=sys.stderr)
         return 1
