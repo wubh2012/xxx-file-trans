@@ -99,12 +99,19 @@ def _dxgi_capture(region: dict | None):
         region["left"] + region["width"], region["top"] + region["height"])
     camera = None
     last = None
+    create_failures = 0
     try:
         while True:
             if camera is None:
                 try:
                     camera = dxcam.create(output_color="GRAY", region=cam_region)
+                    create_failures = 0
                 except Exception:  # noqa: BLE001  过渡期重建同样可能失效
+                    create_failures += 1
+                    if create_failures >= 50:  # ~10s 仍建不起来：明确报错防挂死
+                        raise RuntimeError(
+                            "dxcam 采集器创建持续失败（区域非法或显示输出不可用）"
+                        ) from None
                     time.sleep(0.2)  # 等系统过渡完成再重建
                     continue
             try:

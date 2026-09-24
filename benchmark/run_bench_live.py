@@ -76,6 +76,41 @@ WINDOW_SIZE = (1920, 1040)       # 请求值，实际被屏幕/任务栏钳制�
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 WORK_DIR = RESULTS_DIR / "work"
 
+
+def window_rect_dip() -> tuple[int, int, int, int]:
+    """播放窗口 (x, y, w, h)（DIP）：主显示器工作区（排除任务栏）物理 px ÷ 系统缩放。
+
+    窗口必须整体落在工作区内——dpr>1 时请求 1920×1040 DIP 会被屏幕钳制成
+    整屏物理高度、窗口压在任务栏后面，画布底部角标与任务栏背景连通粘连
+    （浅色主题），不再是「实心正方形」→ 几何自举仅剩顶部 2 角标、网格
+    矩形简并拒帧（2026-09-24 dpr=1.25 实测）。v2 基准 dpr=1 时窗口恰好
+    未越界，未暴露此问题。"""
+    try:
+        import ctypes
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("rcMonitor", _RECT),
+                        ("rcWork", _RECT), ("dwFlags", ctypes.c_uint)]
+
+        user32 = ctypes.windll.user32
+        scale = user32.GetDpiForSystem() / 96  # 进程已声明 per-monitor DPI aware
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        if not user32.GetMonitorInfoW(user32.MonitorFromWindow(0, 1), ctypes.byref(mi)):
+            raise OSError("GetMonitorInfoW failed")
+        x = round(mi.rcWork.left / scale)
+        y = round(mi.rcWork.top / scale)
+        w = round((mi.rcWork.right - mi.rcWork.left) / scale)
+        h = round((mi.rcWork.bottom - mi.rcWork.top) / scale)
+        assert w > 0 and h > 0
+        return x, y, w, h
+    except Exception:  # noqa: BLE001  非 Windows / API 失败回退旧请求值
+        return (*WINDOW_POS, *WINDOW_SIZE)
+
 # Windows 控制台 GBK 下中文判定行会花屏，统一 UTF-8（读输出方按 UTF-8 解）
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -144,15 +179,35 @@ def capture_generator(region: dict, backend: str):
 
 
 def alignment_selfcheck(region: dict, backend: str = "mss", tries: int = 20) -> bool:
-    """区域对准自检：连抓若干帧，任一帧完整解码（数据/元数据帧皆可）即通过。"""
+    """区域对准自检：连抓若干帧，任一帧完整解码（数据/元数据帧皆可）即通过。
+
+    失败时打印拒因分布并把首帧落盘（work/），供遮挡/坐标/后端问题定位。"""
     gen = capture_generator(region, backend)
+    reasons: dict[str, int] = {}
+    first_frame = None
     try:
         for _ in range(tries):
             try:
-                decode_frame(next(gen))
-                return True
-            except (FrameRejected, StopIteration):
+                frame = next(gen)
+            except (StopIteration, RuntimeError) as e:
+                key = f"generator:{type(e).__name__}"
+                reasons[key] = reasons.get(key, 0) + 1
                 time.sleep(0.25)
+                continue
+            if first_frame is None:
+                first_frame = frame
+            try:
+                decode_frame(frame)
+                return True
+            except FrameRejected as e:
+                reasons[e.reason] = reasons.get(e.reason, 0) + 1
+                time.sleep(0.25)
+        print(f"  [自检失败] 拒因 {reasons}", flush=True)
+        if first_frame is not None:
+            dump = WORK_DIR / "selfcheck_failed_frame.png"
+            cv2.imwrite(str(dump), first_frame)
+            print(f"  [自检失败] 首帧已落盘 {dump}（shape={first_frame.shape}）",
+                  flush=True)
         return False
     finally:
         gen.close()
@@ -252,11 +307,14 @@ def main() -> int:
     payload_b = WORK_DIR / "live_payload_b.bin"
     payload_toggle = 0
 
+    win_x, win_y, win_w, win_h = window_rect_dip()
+    print(f"播放窗口 DIP {win_w}x{win_h} @({win_x},{win_y})（工作区钳制，防任务栏遮挡角标）",
+          flush=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
-            args=[f"--window-position={WINDOW_POS[0]},{WINDOW_POS[1]}",
-                  f"--window-size={WINDOW_SIZE[0]},{WINDOW_SIZE[1]}"],
+            args=[f"--window-position={win_x},{win_y}",
+                  f"--window-size={win_w},{win_h}"],
         )
         ctx = browser.new_context(no_viewport=True)
         page = ctx.new_page()
@@ -374,7 +432,8 @@ def main() -> int:
         "capture": capture,
         "fps_list": FPS_LIST, "size_mib": SIZE_MIB, "reps": REPS,
         "calib_cycles": CALIB_CYCLES, "bit_css": BIT_CSS, "pad": PAD,
-        "window": list(WINDOW_SIZE), "region_pad_dip": REGION_PAD_DIP,
+        "window": [win_w, win_h], "window_pos": [win_x, win_y],
+        "region_pad_dip": REGION_PAD_DIP,
         "python": sys.version.split()[0],
         "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多"
                 "一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；"
