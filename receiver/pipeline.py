@@ -184,8 +184,9 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
 
     黑块 = 1（§1），行优先、字节内 MSB first。bw 经 Otsu 二值化后只含
     0/255，邻域均值即暗多数表决，不存在 ±1px 级的取整边界歧义。
-    局部采样（issue #30 C2）：按格心收集邻域（O(格心×k²)），不再对整图
-    做 boxFilter（O(像素)）；索引越界处复制边缘，与原 BORDER_REPLICATE 等价。
+    局部采样（issue #30 C2）：sliding_window_view 取格心窗口视图后按格心
+    gather（O(格心×k²)），不再对整图做 boxFilter（O(像素)）；窗口起点钳制
+    到图像边界，与原 BORDER_REPLICATE 等价。
     """
     x0, y0, _, _ = rect
     k = min(5, geo.bit)
@@ -195,10 +196,10 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
     img_h, img_w = bw.shape
     centers_y = (y0 + (np.arange(geo.rows) + 0.5) * geo.bit).astype(int)
     centers_x = (x0 + (np.arange(geo.cols) + 0.5) * geo.bit).astype(int)
-    offs = np.arange(-half, half + 1)
-    ys = np.clip(centers_y[:, None, None, None] + offs[None, None, :, None], 0, img_h - 1)  # (rows, 1, k, 1)
-    xs = np.clip(centers_x[None, :, None, None] + offs[None, None, None, :], 0, img_w - 1)  # (1, cols, 1, k)
-    window = bw[ys, xs]  # 广播 → (rows, cols, k, k)
+    win = np.lib.stride_tricks.sliding_window_view(bw, (k, k))  # (H-k+1, W-k+1, k, k) 视图
+    rows_sel = np.clip(centers_y - half, 0, img_h - k)
+    cols_sel = np.clip(centers_x - half, 0, img_w - k)
+    window = win[rows_sel[:, None], cols_sel[None, :]]  # → (rows, cols, k, k)
     mean = window.mean(axis=(2, 3))  # 白色占比（0–255）
     bits = (mean < 128).astype(np.uint8)  # 暗多数 = 黑块 = 1
     return np.packbits(bits.flatten(), bitorder="big").tobytes()

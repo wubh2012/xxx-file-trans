@@ -22,8 +22,9 @@
 
 benchmark 实测单帧 ≈ `3.7ms 固定 + 7.6ns/px`。解码 44–239fps 对 FPS≤30 余量充足，但 **4K 屏（外推 67ms/帧 → 15fps）会翻转瓶颈**，重传场景压力也按帧数放大。
 
-- **C1 角标检测缓存**（已落地，issue #30）：几何自举的 `connectedComponentsWithStats` 是 O(像素)，但帧间几何不变——只在首帧/轻量校验失败时全量检测，后续帧只做角标位置的轻量校验（四角标位置应为实心白，失败回退全量）。
-- **C2 局部采样替代全图 boxFilter**（已落地，issue #30）：`receiver/pipeline.py` `_sample_grid` 改为按格心取局部 k×k 邻域求均值（索引越界复制边缘，与原 BORDER_REPLICATE 等价），复杂度 O(像素) → O(格心×25)，BIT=8 时约省 70×。两项合计：792×456 BIT=4 实测 2.98 → 1.47 ms/帧（2.03×）。
+- **C1 角标检测缓存**（已落地，issue #30）：几何自举的 `connectedComponentsWithStats` 是 O(像素)，但帧间几何不变——只在首帧/轻量校验失败时全量检测，后续帧只做角标位置的轻量校验（四角标位置应为实心白，失败回退全量）。实测全量检测占单帧 60%–64%（3.4–36 ms），命中后轻量校验 7 µs——解码提速的绝对主力。
+- **C2 局部采样替代全图 boxFilter**（已落地，issue #30）：`receiver/pipeline.py` `_sample_grid` 改为按格心取局部 k×k 邻域求均值（sliding_window_view + 窗口起点钳制，与原 BORDER_REPLICATE 等价），复杂度 O(像素) → O(格心×25)。盈亏平衡点 BIT≈8：BIT≤5 时 boxFilter 的 SIMD 常数更快（无感，瓶颈在播放节奏），BIT≥8 及 4K 占优。
+- 两项合计（[解码基准](report-decode.md)，9 几何实测）：**2.2–4.6×**；4K 单帧 58.2 → 13.1 ms（解码 17 → 76 fps，v1 预言的 4K 瓶颈翻转解除，余量回到 2.5×）。
 - C3 采集/解码流水线化（生产者-消费者），images/desktop 源通用。
 
 ## 四、减少重传代价（单向信道的结构性问题）

@@ -70,3 +70,20 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
 | 缺帧判级 | calibrate 抓 1 轮循环（deadline 干净收尾），issue #29 三级口径 |
 | 实测到达 FPS | calibrate 帧间隔中位数 + p5/p95——mss 采集跟不上的第一手证据（B2 依据） |
 | 每轮新文件 | 新 file_id 新进度目录（重定向到 `results/work/progress/`），断点续传不串轮 |
+
+## 解码专项基准（C1+C2 验证，issue #30）
+
+单帧解码耗时的优化前后对比：几何矩阵沿用 v1 + 4K 外推档，四配置
+（legacy / 仅C1 / 仅C2 / C1+C2）逐帧计时并做解码结果逐位一致性校验。
+
+```powershell
+# 全量：9 几何 × 60 帧 × 3 轮（约 2 分钟）
+.venv/Scripts/python.exe benchmark/run_bench_decode.py
+
+# 冒烟（秒级）
+.venv/Scripts/python.exe benchmark/run_bench_decode.py --quick
+```
+
+产出 `decode_results.json` / `.csv` 与 [`report-decode.md`](report-decode.md)。
+结论速览：C1+C2 合计 2.2–4.6×，4K 单帧 58.2 → 13.1 ms（解码 17 → 76 fps，
+v1 预言的 4K 瓶颈翻转解除）。

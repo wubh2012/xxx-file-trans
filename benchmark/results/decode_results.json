@@ -1,0 +1,329 @@
+{
+  "meta": {
+    "generated_at": "2026-09-24T11:19:22.509589+00:00",
+    "python": "3.13.1",
+    "quick": false,
+    "n_frames": 60,
+    "repeats": 3,
+    "pad": 4,
+    "dpr": 1,
+    "note": "mean/median/p95 为逐帧 decode_frame 耗时（帧图预读入内存，不含盘 I/O）；legacy/c1 经替换 _sample_grid 为 boxFilter 参照实现"
+  },
+  "runs": [
+    {
+      "frames": 60,
+      "px": 480000,
+      "legacy": {
+        "mean_ms": 5.345,
+        "median_ms": 5.218,
+        "p95_ms": 6.881,
+        "decode_fps": 187.1
+      },
+      "c1": {
+        "mean_ms": 0.92,
+        "median_ms": 0.835,
+        "p95_ms": 1.371,
+        "decode_fps": 1087.3
+      },
+      "c2": {
+        "mean_ms": 7.709,
+        "median_ms": 7.602,
+        "p95_ms": 9.456,
+        "decode_fps": 129.7
+      },
+      "c1c2": {
+        "mean_ms": 2.459,
+        "median_ms": 2.483,
+        "p95_ms": 2.989,
+        "decode_fps": 406.6
+      },
+      "speedup_c1c2": 2.17,
+      "window": "800x600",
+      "bit_input": 4,
+      "bit": 4,
+      "cols": 192,
+      "rows": 142,
+      "chunk_bytes": 3382
+    },
+    {
+      "frames": 60,
+      "px": 473600,
+      "legacy": {
+        "mean_ms": 3.3,
+        "median_ms": 3.28,
+        "p95_ms": 4.071,
+        "decode_fps": 303.0
+      },
+      "c1": {
+        "mean_ms": 1.021,
+        "median_ms": 0.97,
+        "p95_ms": 1.452,
+        "decode_fps": 979.1
+      },
+      "c2": {
+        "mean_ms": 3.733,
+        "median_ms": 3.634,
+        "p95_ms": 4.877,
+        "decode_fps": 267.9
+      },
+      "c1c2": {
+        "mean_ms": 1.108,
+        "median_ms": 1.08,
+        "p95_ms": 1.476,
+        "decode_fps": 902.3
+      },
+      "speedup_c1c2": 2.98,
+      "window": "800x600",
+      "bit_input": 8,
+      "bit": 8,
+      "cols": 92,
+      "rows": 66,
+      "chunk_bytes": 733
+    },
+    {
+      "frames": 60,
+      "px": 456192,
+      "legacy": {
+        "mean_ms": 3.393,
+        "median_ms": 3.298,
+        "p95_ms": 4.408,
+        "decode_fps": 294.8
+      },
+      "c1": {
+        "mean_ms": 1.062,
+        "median_ms": 1.053,
+        "p95_ms": 1.415,
+        "decode_fps": 941.8
+      },
+      "c2": {
+        "mean_ms": 3.601,
+        "median_ms": 3.518,
+        "p95_ms": 4.952,
+        "decode_fps": 277.7
+      },
+      "c1c2": {
+        "mean_ms": 0.74,
+        "median_ms": 0.717,
+        "p95_ms": 0.975,
+        "decode_fps": 1351.9
+      },
+      "speedup_c1c2": 4.59,
+      "window": "800x600",
+      "bit_input": 12,
+      "bit": 12,
+      "cols": 58,
+      "rows": 40,
+      "chunk_bytes": 264
+    },
+    {
+      "frames": 60,
+      "px": 1024000,
+      "legacy": {
+        "mean_ms": 10.857,
+        "median_ms": 10.852,
+        "p95_ms": 12.972,
+        "decode_fps": 92.1
+      },
+      "c1": {
+        "mean_ms": 2.567,
+        "median_ms": 2.529,
+        "p95_ms": 3.167,
+        "decode_fps": 389.5
+      },
+      "c2": {
+        "mean_ms": 13.438,
+        "median_ms": 13.345,
+        "p95_ms": 16.082,
+        "decode_fps": 74.4
+      },
+      "c1c2": {
+        "mean_ms": 4.818,
+        "median_ms": 4.798,
+        "p95_ms": 5.642,
+        "decode_fps": 207.6
+      },
+      "speedup_c1c2": 2.25,
+      "window": "1280x800",
+      "bit_input": 4,
+      "bit": 5,
+      "cols": 248,
+      "rows": 152,
+      "chunk_bytes": 4686
+    },
+    {
+      "frames": 60,
+      "px": 1024000,
+      "legacy": {
+        "mean_ms": 7.466,
+        "median_ms": 7.393,
+        "p95_ms": 9.494,
+        "decode_fps": 133.9
+      },
+      "c1": {
+        "mean_ms": 2.026,
+        "median_ms": 1.975,
+        "p95_ms": 2.613,
+        "decode_fps": 493.7
+      },
+      "c2": {
+        "mean_ms": 7.668,
+        "median_ms": 7.649,
+        "p95_ms": 9.543,
+        "decode_fps": 130.4
+      },
+      "c1c2": {
+        "mean_ms": 2.264,
+        "median_ms": 2.256,
+        "p95_ms": 2.757,
+        "decode_fps": 441.7
+      },
+      "speedup_c1c2": 3.3,
+      "window": "1280x800",
+      "bit_input": 8,
+      "bit": 8,
+      "cols": 152,
+      "rows": 92,
+      "chunk_bytes": 1722
+    },
+    {
+      "frames": 60,
+      "px": 976896,
+      "legacy": {
+        "mean_ms": 6.015,
+        "median_ms": 5.956,
+        "p95_ms": 7.023,
+        "decode_fps": 166.2
+      },
+      "c1": {
+        "mean_ms": 1.852,
+        "median_ms": 1.79,
+        "p95_ms": 2.389,
+        "decode_fps": 540.0
+      },
+      "c2": {
+        "mean_ms": 5.768,
+        "median_ms": 5.707,
+        "p95_ms": 7.043,
+        "decode_fps": 173.4
+      },
+      "c1c2": {
+        "mean_ms": 1.555,
+        "median_ms": 1.483,
+        "p95_ms": 2.13,
+        "decode_fps": 643.1
+      },
+      "speedup_c1c2": 3.87,
+      "window": "1280x800",
+      "bit_input": 12,
+      "bit": 12,
+      "cols": 98,
+      "rows": 56,
+      "chunk_bytes": 660
+    },
+    {
+      "frames": 60,
+      "px": 2073600,
+      "legacy": {
+        "mean_ms": 14.424,
+        "median_ms": 14.106,
+        "p95_ms": 17.272,
+        "decode_fps": 69.3
+      },
+      "c1": {
+        "mean_ms": 5.037,
+        "median_ms": 4.98,
+        "p95_ms": 6.269,
+        "decode_fps": 198.5
+      },
+      "c2": {
+        "mean_ms": 14.483,
+        "median_ms": 14.192,
+        "p95_ms": 17.119,
+        "decode_fps": 69.0
+      },
+      "c1c2": {
+        "mean_ms": 4.546,
+        "median_ms": 4.433,
+        "p95_ms": 5.682,
+        "decode_fps": 220.0
+      },
+      "speedup_c1c2": 3.17,
+      "window": "1920x1080",
+      "bit_input": 4,
+      "bit": 8,
+      "cols": 232,
+      "rows": 127,
+      "chunk_bytes": 3657
+    },
+    {
+      "frames": 60,
+      "px": 2073600,
+      "legacy": {
+        "mean_ms": 14.83,
+        "median_ms": 14.684,
+        "p95_ms": 16.513,
+        "decode_fps": 67.4
+      },
+      "c1": {
+        "mean_ms": 5.165,
+        "median_ms": 5.071,
+        "p95_ms": 6.277,
+        "decode_fps": 193.6
+      },
+      "c2": {
+        "mean_ms": 13.818,
+        "median_ms": 13.645,
+        "p95_ms": 16.043,
+        "decode_fps": 72.4
+      },
+      "c1c2": {
+        "mean_ms": 3.196,
+        "median_ms": 3.097,
+        "p95_ms": 4.117,
+        "decode_fps": 312.9
+      },
+      "speedup_c1c2": 4.64,
+      "window": "1920x1080",
+      "bit_input": 12,
+      "bit": 12,
+      "cols": 152,
+      "rows": 82,
+      "chunk_bytes": 1532
+    },
+    {
+      "frames": 60,
+      "px": 8294400,
+      "legacy": {
+        "mean_ms": 58.181,
+        "median_ms": 58.283,
+        "p95_ms": 67.663,
+        "decode_fps": 17.2
+      },
+      "c1": {
+        "mean_ms": 22.405,
+        "median_ms": 22.402,
+        "p95_ms": 24.758,
+        "decode_fps": 44.6
+      },
+      "c2": {
+        "mean_ms": 45.021,
+        "median_ms": 44.751,
+        "p95_ms": 50.11,
+        "decode_fps": 22.2
+      },
+      "c1c2": {
+        "mean_ms": 13.137,
+        "median_ms": 13.15,
+        "p95_ms": 14.914,
+        "decode_fps": 76.1
+      },
+      "speedup_c1c2": 4.43,
+      "window": "3840x2160",
+      "bit_input": 4,
+      "bit": 15,
+      "cols": 248,
+      "rows": 136,
+      "chunk_bytes": 4190
+    }
+  ]
+}
