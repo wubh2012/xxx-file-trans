@@ -13,10 +13,12 @@ awareness（模块导入副作用），薄壳须先导入本模块再创建任�
 """
 
 import queue
+import shutil
 import threading
 import time
 from pathlib import Path
 
+from receiver import paths
 from receiver.pipeline import FrameRejected
 from receiver.run import ReceiveResult, run_receive
 from receiver.sources import iter_source
@@ -97,6 +99,35 @@ def make_frames(source: str, *, frames_dir=None, video=None, region=None):
     if source == "video":
         return iter_video(video)
     raise ValueError(f"未知源 {source}")
+
+
+def progress_tasks(progress_dir: Path | None = None) -> list[Path]:
+    """progress/ 下未完成任务目录列表（重新开始确认文案用，issue #26）。
+
+    progress_dir None = 锚定 paths.PROGRESS_DIR（运行时取属性，测试
+    monkeypatch 生效）；目录不存在视为无任务。
+    """
+    root = paths.PROGRESS_DIR if progress_dir is None else Path(progress_dir)
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir() if p.is_dir())
+
+
+def clear_progress(progress_dir: Path | None = None) -> list[str]:
+    """清空全部未完成任务目录（GUI「重新开始」，issue #26）：已收帧作废，
+    同 fileId 重收不续传。返回已删除的任务目录名；无任务目录为空操作。
+    个别目录删除失败（如句柄占用）时删完其余后抛 OSError，不静默吞错。
+    """
+    removed, errors = [], []
+    for task in progress_tasks(progress_dir):
+        try:
+            shutil.rmtree(task)
+            removed.append(task.name)
+        except OSError as e:
+            errors.append(f"{task.name}：{e}")
+    if errors:
+        raise OSError("；".join(errors))
+    return removed
 
 
 class ProgressModel:

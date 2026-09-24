@@ -11,6 +11,8 @@
 
 import os
 import queue
+import shutil
+import sys
 import time
 import zlib
 from pathlib import Path
@@ -19,7 +21,8 @@ import pytest
 
 from receiver import paths
 from receiver.gui_core import (ProgressModel, QueuedReporter, ReceiveJob,
-                               build_command, validate_config)
+                               build_command, clear_progress, progress_tasks,
+                               validate_config)
 from receiver.pipeline import FrameRejected
 
 # 夹具与真帧 helper 复用 headless 核心测试（同 test_notify 复用 test_receiver_images 惯例）
@@ -223,6 +226,45 @@ class TestReceiveJob:
         assert result.error and "nope.mp4" in result.error
 
 
+# ---------- progress_tasks / clear_progress：重新开始（已收进度作废） ----------
+
+class TestClearProgress:
+    def test_lists_and_removes_task_dirs(self, progress_root):
+        """清空全部任务目录并返回已删目录名；非目录文件不动。"""
+        (progress_root / "0DEADBEEF").mkdir(parents=True)
+        (progress_root / "0CAFEBABE").mkdir()
+        (progress_root / "notes.txt").write_text("x")
+
+        assert [p.name for p in progress_tasks()] == ["0CAFEBABE", "0DEADBEEF"]
+        removed = clear_progress()
+
+        assert sorted(removed) == ["0CAFEBABE", "0DEADBEEF"]
+        assert progress_tasks() == []
+        assert (progress_root / "notes.txt").is_file()
+
+    def test_missing_dir_is_empty(self, tmp_path):
+        """progress/ 不存在 = 无任务，空操作。"""
+        assert progress_tasks(tmp_path / "nope") == []
+        assert clear_progress(tmp_path / "nope") == []
+
+    def test_partial_failure_raises_after_rest(self, progress_root, monkeypatch):
+        """个别目录删不掉（句柄占用）：删完其余后抛 OSError，不静默吞错。"""
+        (progress_root / "0DEADBEEF").mkdir(parents=True)
+        (progress_root / "0CAFEBABE").mkdir()
+        real_rmtree = shutil.rmtree
+
+        def flaky_rmtree(path, *a, **kw):
+            if Path(path).name == "0DEADBEEF":
+                raise OSError("句柄占用")
+            return real_rmtree(path, *a, **kw)
+
+        monkeypatch.setattr("receiver.gui_core.shutil.rmtree", flaky_rmtree)
+        with pytest.raises(OSError) as ei:
+            clear_progress()
+        assert "0DEADBEEF" in str(ei.value)
+        assert not (progress_root / "0CAFEBABE").exists()
+
+
 def iter_video_missing(tmp_path):
     from receiver.sources.video import iter_video
     return iter_video(tmp_path / "nope.mp4")  # 生成器惰性打开，首次迭代抛 ValueError
@@ -239,6 +281,7 @@ class TestTkinterShellSmoke:
             "receiver_gui_shell",
             Path(__file__).resolve().parent.parent / "receiver_gui.pyw")
         mod = importlib.util.module_from_spec(spec)
+        sys.modules["receiver_gui_shell"] = mod  # _restart 测试按名取模块打桩
         spec.loader.exec_module(mod)  # 仅导入装配层，不进 mainloop
         try:
             root = tk.Tk()
@@ -267,3 +310,30 @@ class TestTkinterShellSmoke:
         shell.dir_var.set(str(tmp_path))
         assert shell.command_var.get() == \
             f'python -m receiver receive --source images --dir "{tmp_path}"'
+
+    def test_restart_button_in_controls(self, shell):
+        """重新开始按钮与开始接收并排，接收中一并置灰。"""
+        assert shell.restart_btn in shell._controls
+        shell._set_setup_state("disabled")
+        assert str(shell.restart_btn["state"]) == "disabled"
+
+    def test_restart_clears_then_starts(self, shell, progress_root, monkeypatch):
+        """确认 → 清空已收进度 → 复用 _start（不续传）。"""
+        mod = sys.modules["receiver_gui_shell"]
+        (progress_root / "0DEADBEEF").mkdir(parents=True)
+        calls = []
+        monkeypatch.setattr(mod, "clear_progress", lambda: calls.append("clear"))
+        monkeypatch.setattr(mod.messagebox, "askyesno", lambda *a, **k: True)
+        monkeypatch.setattr(shell, "_start", lambda: calls.append("start"))
+        shell._restart()
+        assert calls == ["clear", "start"]
+
+    def test_restart_cancelled_is_noop(self, shell, monkeypatch):
+        """确认框取消 → 不清进度、不开始。"""
+        mod = sys.modules["receiver_gui_shell"]
+        calls = []
+        monkeypatch.setattr(mod, "clear_progress", lambda: calls.append("clear"))
+        monkeypatch.setattr(mod.messagebox, "askyesno", lambda *a, **k: False)
+        monkeypatch.setattr(shell, "_start", lambda: calls.append("start"))
+        shell._restart()
+        assert calls == []

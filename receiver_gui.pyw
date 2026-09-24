@@ -4,7 +4,8 @@
 tkinter 薄壳：状态、校验、文案、线程编排都在 receiver.gui_core（无头
 测试），本文件只做控件装配与事件转发。框选复用 pick.py 冻屏框选
 （主窗口隐藏 → 全屏覆盖 → 回填坐标）。一次收一个文件，收完回初始
-界面；接收中停止 / 关窗经确认后协作式停止，已收帧保留可续传。
+界面；接收中停止 / 关窗经确认后协作式停止，已收帧保留可续传；
+「重新开始」则清空已收进度后不续传重收。
 
 导入顺序即 DPI 约定：先导入 gui_core（连带 receiver.sources.desktop
 声明 per-monitor DPI awareness），再创建任何 Tk 控件——--region 物理
@@ -31,8 +32,8 @@ if _venv_pythonw.is_file() and Path(sys.executable).resolve().parent != _venv_sc
     sys.exit(0)
 
 from receiver.gui_core import (GUI_SOURCES, SOURCE_LABELS, ProgressModel,
-                               ReceiveJob, build_command, make_frames,
-                               validate_config)
+                               ReceiveJob, build_command, clear_progress,
+                               make_frames, progress_tasks, validate_config)
 from receiver.notify import default_notifier
 from receiver.paths import OUTPUT_DIR
 from receiver.pick import pick_region
@@ -131,11 +132,19 @@ class ReceiverGui:
         command_label.pack(fill="x", pady=(4, 4))
         ttk.Button(helper, text="复制命令", command=self._copy_command).pack(anchor="w")
 
-        self.start_btn = ttk.Button(setup, text="开始接收", command=self._start)
-        self.start_btn.pack(anchor="e", pady=(10, 0))
+        # 重新开始 = 清空已收进度后重收（不续传，区别于停止后重收的续传语义）
+        btn_row = ttk.Frame(setup)
+        btn_row.pack(fill="x", pady=(10, 0))
+        self.restart_btn = ttk.Button(btn_row, text="重新开始",
+                                      command=self._restart)
+        self.restart_btn.pack(side="right")
+        self.start_btn = ttk.Button(btn_row, text="开始接收",
+                                    command=self._start)
+        self.start_btn.pack(side="right", padx=(0, 8))
 
         # 接收中置灰的控件面（命令助手除外：发送端此时正需要照抄命令）
-        self._controls = [source_row, *self._param_frames.values(), self.start_btn]
+        self._controls = [source_row, *self._param_frames.values(),
+                          self.start_btn, self.restart_btn]
 
     # ---------- 装配：进度 / 结果区 ----------
 
@@ -235,7 +244,25 @@ class ReceiverGui:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
 
-    # ---------- 开始 / 停止 / 收尾 ----------
+    # ---------- 开始 / 重新开始 / 停止 / 收尾 ----------
+
+    def _restart(self):
+        """重新开始（issue #26）：清空 progress/ 全部已收进度后按当前参数
+        重收——同 fileId 也不续传，与「停止后重收」的续传语义相对。"""
+        tasks = progress_tasks()
+        detail = (f"将删除 {len(tasks)} 个未完成任务目录的已收帧，"
+                  "重新接收同一文件不续传。" if tasks else
+                  "当前没有已收进度，效果与「开始接收」相同。")
+        if not messagebox.askyesno("重新开始",
+                                   f"确定重新开始？\n{detail}",
+                                   parent=self.root):
+            return
+        try:
+            clear_progress()
+        except OSError as e:  # 个别目录删不掉（句柄占用等），不带着旧进度开收
+            messagebox.showerror("清除进度失败", str(e), parent=self.root)
+            return
+        self._start()
 
     def _start(self):
         source = self.source_var.get()
