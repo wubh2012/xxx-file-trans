@@ -467,6 +467,7 @@ async function startPlayback() {
   stage.hidden = false;
   document.body.classList.add('playing', state.playMode);   // 模式标注供样式与自动化
   state.playing = true;
+  requestWakeLock();   // 防熄屏（issue #32）：挂播放生命周期，不支持时静默降级
   playbackSequence = buildPlaybackSequence();
   playPos = 0; holdUntil = 0; lastTs = -1e9;
   rafId = requestAnimationFrame(loop);
@@ -474,12 +475,57 @@ async function startPlayback() {
 
 function stopPlayback() {
   state.playing = false;
+  releaseWakeLock();
+  hiddenWhilePlaying = false;
   cancelAnimationFrame(rafId);
   stage.hidden = true;
   document.body.classList.remove('playing', 'fullscreen', 'window');
   el('playBtn').disabled = false;   // 文件已加载，可直接换模式重播
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
+
+/* ---------- 播放可靠性护栏（issue #32）---------- */
+/* Wake Lock 防熄屏：显示器空闲熄屏实测会让 rAF 停摆、接收端 ACCESS_LOST，
+   整轮报废（benchmark 复测）。播放期间申请 screen Wake Lock；系统强制释放
+   （含页面切后台）后由 visibilitychange 切回路径自动重取；停止播放主动释放。
+   浏览器不支持该 API 时静默降级——不报错、不阻塞播放。 */
+let wakeLock = null;
+async function requestWakeLock() {
+  if (!state.playing || wakeLock || !('wakeLock' in navigator)) return;
+  try {
+    const wl = await navigator.wakeLock.request('screen');
+    if (!state.playing) {   // await 期间已停止播放：立即释放，不留悬挂的锁
+      wl.release().catch(() => {});
+      return;
+    }
+    wakeLock = wl;
+    wl.addEventListener('release', () => { if (wakeLock === wl) wakeLock = null; });
+  } catch (e) { /* 系统拒绝等场景：播放不受阻（hidden 态切回后由下方自动重取） */ }
+}
+function releaseWakeLock() {
+  if (!wakeLock) return;
+  const wl = wakeLock;
+  wakeLock = null;   // 先清内部状态，release 触发的事件回调即成空操作
+  wl.release().catch(() => {});
+}
+
+/* 后台标签页节流警示：rAF 在页面 hidden 后降到 ~1fps，传输静默停滞，
+   单向信道下用户无从察觉。播放期间切离再切回时给一次性状态栏提示；
+   同时承担 Wake Lock 自动重取（页面 hidden 时被系统释放）。 */
+let hiddenWhilePlaying = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    hiddenWhilePlaying = state.playing;
+  } else {
+    if (hiddenWhilePlaying) {
+      hiddenWhilePlaying = false;
+      if (state.playing) setStatus('播放曾被后台暂停/节流，建议确认接收端收帧情况', true);
+    }
+    // 无条件补取：覆盖 hidden 态启动播放（request 被拒）的边界，
+    // 正常播放中锁未失守时此调用为空操作
+    requestWakeLock();
+  }
+});
 
 /* ---------- 文件处理：fileId（纯内容 CRC32）→ gzip → 分片封帧 ---------- */
 /* 逐块读流，返回总字节数；onChunk 可选回调处理每块 */
@@ -749,6 +795,7 @@ window.__sender = {
   state, selfTest, crcUpdate, crcFinal, deriveGeometry,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
   renderFrame, renderMetadataFrame, buildExportFrames, buildReceiverCommand,
+  hasWakeLock: () => !!wakeLock,   // Wake Lock 生命周期断言（issue #32）
   FINAL_FRAME_HOLD_MS,
 };
 </script>
