@@ -68,11 +68,11 @@ def test_fps_warning_toggles_live_on_input(browser, entered, warns):
         ctx.close()
 
 
-def test_fps_default_10_no_warning(browser):
-    """默认 FPS=10 不警示（发送端不知道对端采集方式，不替场景选默认）。"""
+def test_fps_default_15_no_warning(browser):
+    """默认 FPS=15 不警示（benchmark-v2 实测 desktop 安全档下限，camera 拍摄同样保守可用）。"""
     page, ctx = make_page(browser)
     try:
-        assert page.input_value("#fps") == "10"
+        assert page.input_value("#fps") == "15"
         assert page.is_hidden("#fpsWarn")
     finally:
         ctx.close()

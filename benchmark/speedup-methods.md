@@ -54,9 +54,12 @@ benchmark 实测单帧 ≈ `3.7ms 固定 + 7.6ns/px`。解码 44–239fps 对 FP
 30 FPS 缺帧率下降且 SHA-256 全部通过；必须同时统计队列丢弃和 CRC 拒帧，
 不能只看平均 FPS。
 
-**第一版已实现（待实投复测）**：`run_receive(..., prefetch=True)` 为实时
-desktop 源启用容量为 2 的预取队列；队列过载时丢弃旧候选、保留最新画面，
-并在 `ReceiveResult.queue_produced / queue_dropped` 暴露统计。images/video
+**第一版已实现并随实投基准复测**（2026-09-26 文件大小实测 1–10 MiB 均走
+desktop 源、自动启用 prefetch，`sha_ok` 4/4 通过，1/2/10 MiB wall ≈ 理论
+单轮 +10–20%）：
+`run_receive(..., prefetch=True)` 为实时 desktop 源启用容量为 2 的预取队列；
+队列过载时丢弃旧候选、保留最新画面，并在
+`ReceiveResult.queue_produced / queue_dropped` 暴露统计。images/video
 默认不启用，保持离线帧序列的完整性语义。
 
 ### D1 稳定帧闸门自适应
