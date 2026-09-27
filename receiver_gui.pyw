@@ -284,7 +284,8 @@ class ReceiverGui:
         self.model = ProgressModel()
         self.events = queue.Queue()
         self.job = ReceiveJob(lambda: make_frames(source, **source_params),
-                              OUTPUT_DIR, self.events, notify=self._notifier)
+                              OUTPUT_DIR, self.events, notify=self._notifier,
+                              prefetch=(source == "desktop"))
         self.result_var.set("")
         self.result_label.pack_forget()
         self._set_setup_state("disabled")

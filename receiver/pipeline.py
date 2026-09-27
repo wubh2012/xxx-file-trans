@@ -22,11 +22,15 @@ import numpy as np
 from receiver.metadata import FIXED_BYTES as METADATA_FIXED_BYTES
 from receiver.metadata import FileMetadata, parse_metadata
 from receiver.protocol import (
+    FLAGS_ALLOWED,
+    FLAGS_FEC,
     FRAME_NO_METADATA,
     HEADER_BYTES,
     SYNC,
     VER,
     FrameRejected,
+    fec_parity_count,
+    is_fec_frame,
     verify_crc,
 )
 
@@ -283,9 +287,19 @@ def decode_frame(img: np.ndarray, geo_cache: GeometryCache | None = None) -> Dec
     capacity = len(grid_bytes) - HEADER_BYTES
     if h.data_len > capacity:
         raise FrameRejected("data_len", f"DATA_LEN={h.data_len} 超出网格容量 {capacity}")
-    if h.frame_no != FRAME_NO_METADATA and h.frame_no >= h.total_frames:
+    is_fec = bool(h.flags & FLAGS_FEC)
+    if is_fec:
+        if not is_fec_frame(h.frame_no, h.total_frames):
+            raise FrameRejected(
+                "frame_no",
+                f"FEC 帧号 {h.frame_no} 不在 [{h.total_frames}, "
+                f"{h.total_frames + fec_parity_count(h.total_frames)})",
+            )
+        if h.data_len != h.chunk_size:
+            raise FrameRejected("data_len", "FEC 校验帧必须携带完整 CHUNK_SIZE")
+    elif h.frame_no != FRAME_NO_METADATA and h.frame_no >= h.total_frames:
         raise FrameRejected("frame_no", f"{h.frame_no} ≥ TOTAL_FRAMES {h.total_frames}")
-    if h.flags & ~0x8000:
+    if h.flags & ~FLAGS_ALLOWED:
         raise FrameRejected("flags", f"保留位非 0: 0x{h.flags:04X}")
 
     verify_crc(header, grid_bytes[HEADER_BYTES:])

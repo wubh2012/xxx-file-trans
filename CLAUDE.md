@@ -5,7 +5,7 @@
 跨隔离网络单向文件摆渡系统：文件经「屏幕显示 → 拍摄/抓屏采集 → 识别还原」这一唯一单向信道从内网传到外网。
 
 - **发送端**：`sender.html` —— 浏览器单文件页面（原生 JS，无构建步骤），把文件编码为黑白方块帧序列，支持导出 PNG 序列（`frames_png/` + `frames.json`）、全屏/窗口播放。
-- **接收端**：`receiver/` —— Python 包（≥3.11），入口 `python -m receiver`（契约见需求文档 §6）。取帧源 4 种：camera / video / images / desktop（mss），位于 `receiver/sources/`。
+- **接收端**：`receiver/` —— Python 包（≥3.11），入口 `python -m receiver`（契约见需求文档 §6）。取帧源 4 种：camera / video / images / desktop（Windows 自动优先 DXGI，不可用时回退 mss），位于 `receiver/sources/`。
 - **测试**：`tests/`，含端到端闭环测试（playwright 驱动 sender.html 导出 PNG → images 源解码逐字节比对）。
 
 ## 关键命令

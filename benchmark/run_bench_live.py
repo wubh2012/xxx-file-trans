@@ -26,8 +26,9 @@ desktop 抓屏的丢帧与吞吐**，直接检验 speedup-methods.md B1 的前�
     使用一致；单变量只扫 FPS，窗口/BIT/文件大小固定。
 
 用法：
-    .venv/Scripts/python.exe benchmark/run_bench_live.py           # 全量约 10 分钟
+    .venv/Scripts/python.exe benchmark/run_bench_live.py           # 随机基准
     .venv/Scripts/python.exe benchmark/run_bench_live.py --quick   # 冒烟 1–2 分钟
+    .venv/Scripts/python.exe benchmark/run_bench_live.py --input output/a.jpg --fps-list 30 --reps 1
 """
 
 import argparse
@@ -53,8 +54,8 @@ from receiver import paths  # noqa: E402
 from receiver.calibrate import run_calibration  # noqa: E402
 from receiver.pipeline import FrameRejected, decode_frame  # noqa: E402
 from receiver.run import run_receive  # noqa: E402
-from receiver.sources.desktop import iter_desktop  # noqa: E402  # 导入即声明 DPI 感知
-from receiver.sources.desktop import _dxgi_capture, _mss_capture  # noqa: E402
+from receiver.sources.desktop import (DXGIRecoveryError, iter_desktop,
+                                      _dxgi_capture, _mss_capture)  # noqa: E402
 
 # ---------- 基准参数（单变量扫 FPS，其余固定） ----------
 # 冒烟实测（2026-09-24）：FPS 30/60 时实收节拍仅 5.75/0.2 fps（稳定闸门两帧
@@ -64,8 +65,8 @@ from receiver.sources.desktop import _dxgi_capture, _mss_capture  # noqa: E402
 
 FPS_LIST = [10, 15, 20, 30]
 SIZE_MIB = 5
-BIT_CSS = 8                      # CSS px/块；物理 BIT = ×dpr，>15 时报错退出
-PAD = 4                          # sender.html 默认
+BIT_CSS = 6                      # CSS px/块；125% 缩放下物理 BIT=8
+PAD = 3                          # 角标所需的最小静默区
 REPS = 3                         # 每档接收计时次数
 CALIB_CYCLES = 1                 # calibrate 抓几轮循环（1 轮足够缺帧判级）
 GRACE_S = 10.0                   # calibrate / 自检 / 超时的宽限秒数
@@ -182,13 +183,23 @@ def alignment_selfcheck(region: dict, backend: str = "mss", tries: int = 20) -> 
     """区域对准自检：连抓若干帧，任一帧完整解码（数据/元数据帧皆可）即通过。
 
     失败时打印拒因分布并把首帧落盘（work/），供遮挡/坐标/后端问题定位。"""
-    gen = capture_generator(region, backend)
+    active_backend = backend
+    gen = capture_generator(region, active_backend)
     reasons: dict[str, int] = {}
     first_frame = None
     try:
         for _ in range(tries):
             try:
                 frame = next(gen)
+            except DXGIRecoveryError:
+                if active_backend != "dxgi":
+                    raise
+                # 自检也必须与正式 desktop 流共享 DXGI → mss 降级，
+                # 否则区域自检会在 ACCESS_LOST 上反复重启 DXGI。
+                gen.close()
+                active_backend = "mss"
+                gen = capture_generator(region, active_backend)
+                continue
             except (StopIteration, RuntimeError) as e:
                 key = f"generator:{type(e).__name__}"
                 reasons[key] = reasons.get(key, 0) + 1
@@ -222,8 +233,17 @@ def frames_with_deadline(gen, deadline: float):
             return
 
 
+def calibrate_capture(region: dict, backend: str, deadline: float) -> dict:
+    """校准一轮后显式关闭 desktop 生成器，释放 DXGI duplication 单例。"""
+    gen = iter_desktop(region=region, backend=backend)
+    try:
+        return run_calibration(frames_with_deadline(gen, deadline))
+    finally:
+        gen.close()
+
+
 def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
-                   backend: str = "mss") -> None:
+                   backend: str = "mss", progress_dir: Path | None = None) -> None:
     """接收线程主体：结果与拒帧计数写入 box（线程内启动采集，随循环播放
     收齐后自然结束；file_id 每轮唯一，滞留不串轮）。
 
@@ -234,6 +254,11 @@ def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
     两个 grab 循环互抢帧双双饿死（2026-09-24 FPS 45 实测）。"""
     rep = LiveReporter()
     box["reporter"] = rep
+    # 同一真实文件多轮复测时 fileId 相同，必须为每轮隔离续传目录，避免
+    # 上一轮失败留下的位图污染下一轮统计。
+    previous_progress = paths.PROGRESS_DIR
+    if progress_dir is not None:
+        paths.PROGRESS_DIR = progress_dir
     stop = threading.Event()
     box["stop"] = stop
     gen = iter_desktop(region=region, backend=backend)
@@ -241,11 +266,17 @@ def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
     t0 = time.perf_counter()
     try:
         result = run_receive(gen, out_dir, reporter_factory=lambda: rep,
-                             notify=None, stop_check=stop.is_set)
+                             notify=None, stop_check=stop.is_set, prefetch=True)
         box["result"] = result
     finally:
-        gen.close()
+        try:
+            gen.close()
+        except ValueError:
+            # C3 预取生产者可能仍在 generator.next() 内；run_receive
+            # 已设置停止标志并等待其收尾，跨线程 close 只能作为尽力而为。
+            pass
         box["worker_s"] = time.perf_counter() - t0
+        paths.PROGRESS_DIR = previous_progress
 
 
 def verdict_line(report: dict) -> str:
@@ -265,13 +296,17 @@ def verdict_line(report: dict) -> str:
             f"（{t['missingRate']:.1%}）：显著，建议降档")
 
 
-def load_and_play(page, path: Path, fps: int) -> None:
+def load_and_play(page, path: Path, fps: int,
+                  bit_css: int = BIT_CSS, pad: int = PAD) -> None:
     """载入文件并确保进入播放态（自愈）。
 
     同路径重复 set_input_files 的 change 事件在 Chromium 下不可靠（e2e
     从未覆盖双次载入），故：A/B 路径交替 + 载前清空 input value；仍失败
     则读 status 诊断后整页 reload 重来（窗口尺寸不变，抓屏区域仍有效）。"""
     page.evaluate("() => { document.getElementById('file').value = ''; }")
+    page.fill("#bit", str(bit_css))
+    page.fill("#pad", str(pad))
+    page.fill("#fps", str(fps))
     page.set_input_files("#file", str(path))
     try:
         page.wait_for_selector("body.playing", timeout=10000)
@@ -283,6 +318,8 @@ def load_and_play(page, path: Path, fps: int) -> None:
     page.reload()
     page.wait_for_selector("#modeWindow", timeout=10000)
     page.click("#modeWindow")
+    page.fill("#bit", str(bit_css))
+    page.fill("#pad", str(pad))
     page.fill("#fps", str(fps))
     page.evaluate("() => { document.getElementById('file').value = ''; }")
     page.set_input_files("#file", str(path))
@@ -296,15 +333,44 @@ def main() -> int:
                     help="冒烟：1MiB × FPS {30,60} × 1 次接收 × 1 轮校准")
     ap.add_argument("--capture", choices=["mss", "dxgi"], default="mss",
                     help="desktop 采集后端（B2 复测用 dxgi；默认 mss 与 v2 报告同口径）")
+    ap.add_argument("--input", type=Path,
+                    help="真实文件路径；指定后所有档位/rep 使用同一文件并校验 SHA-256")
+    ap.add_argument("--bit-css", type=int, default=BIT_CSS,
+                    help="发送端 CSS BIT（默认 6；125%% 缩放下物理 BIT=8）")
+    ap.add_argument("--pad", type=int, default=PAD,
+                    help="发送端 PAD（默认 3，范围 3..15）")
+    ap.add_argument("--reps", type=int, default=None,
+                    help="每个 FPS 档接收次数（真实文件建议 1，默认基准为 3）")
+    ap.add_argument("--calib-cycles", type=int, default=None,
+                    help="每档 calibrate 循环数（真实文件可设 1）")
     ap.add_argument("--fps-list", default=None,
                     help="逗号分隔 FPS 档位覆盖（如 15,20,30,45,60）")
     args = ap.parse_args()
+    if not 1 <= args.bit_css <= 15:
+        ap.error("--bit-css 范围为 1..15")
+    if not 3 <= args.pad <= 15:
+        ap.error("--pad 范围为 3..15")
     if args.quick:
         FPS_LIST, SIZE_MIB, REPS, CALIB_CYCLES = [30, 60], 1, 1, 1
     if args.fps_list:
         FPS_LIST = [int(x) for x in args.fps_list.split(",")]
+    if args.reps is not None:
+        if args.reps < 1:
+            ap.error("--reps 必须 >= 1")
+        REPS = args.reps
+    if args.calib_cycles is not None:
+        if args.calib_cycles < 1:
+            ap.error("--calib-cycles 必须 >= 1")
+        CALIB_CYCLES = args.calib_cycles
+    if args.input is not None:
+        args.input = args.input.resolve()
+        if not args.input.is_file():
+            ap.error(f"--input 文件不存在：{args.input}")
     capture = args.capture
     suffix = "" if capture == "mss" else f"_{capture}"
+    if args.input is not None:
+        # 真实文件基准不能覆盖随机负载基准的历史结果。
+        suffix += "_output"
     results_json = RESULTS_DIR / f"live_desktop_results{suffix}.json"
     results_csv = RESULTS_DIR / f"live_desktop_results{suffix}.csv"
 
@@ -348,6 +414,8 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
     runs, calibs = [], []
     payload_a = WORK_DIR / "live_payload_a.bin"
     payload_b = WORK_DIR / "live_payload_b.bin"
+    fixed_raw = args.input.read_bytes() if args.input is not None else None
+    fixed_sha = hashlib.sha256(fixed_raw).hexdigest() if fixed_raw is not None else None
     payload_toggle = 0
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
@@ -360,18 +428,20 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         page = ctx.new_page()
         page.goto(sender_uri)
         page.click("#modeWindow")
+        page.fill("#bit", str(args.bit_css))
+        page.fill("#pad", str(args.pad))
         page.bring_to_front()
 
         for fps in FPS_LIST:
             print(f"=== FPS {fps} ===", flush=True)
-            raw = os.urandom(SIZE_MIB * 1024 * 1024)
+            raw = fixed_raw if fixed_raw is not None else os.urandom(SIZE_MIB * 1024 * 1024)
             payload_toggle += 1
             raw_path = payload_a if payload_toggle % 2 else payload_b
             raw_path.write_bytes(raw)
             page.fill("#fps", str(fps))
 
             # 载入文件自动播放（窗口模式），页面 JS 实测几何与画布
-            load_and_play(page, raw_path, fps)
+            load_and_play(page, raw_path, fps, args.bit_css, args.pad)
             page.bring_to_front()
             geo = page.evaluate("() => ({fps: __sender.state.geo.FPS,"
                                 " bit: __sender.state.geo.BIT,"
@@ -396,9 +466,8 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
 
             # calibrate：抓 CALIB_CYCLES 轮 + 宽限，deadline 干净收尾判级
             calib_s = CALIB_CYCLES * cycle_s + GRACE_S
-            report = run_calibration(
-                frames_with_deadline(iter_desktop(region=region, backend=capture),
-                                     time.perf_counter() + calib_s))
+            report = calibrate_capture(
+                region, capture, time.perf_counter() + calib_s)
             fps_stat = report.get("measuredFps")
             calibs.append({"fps": fps, "calib_s": round(calib_s, 1),
                            "measuredFps": fps_stat, "report": report,
@@ -412,10 +481,12 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
             tier = {"fps": fps, "geo": geo, "cycle_s": round(cycle_s, 1),
                     "dpr": dpr, "region": region, "reps": []}
             for rep in range(REPS):
-                raw = os.urandom(SIZE_MIB * 1024 * 1024)
+                raw = fixed_raw if fixed_raw is not None else os.urandom(SIZE_MIB * 1024 * 1024)
                 payload_toggle += 1
-                raw_path = payload_a if payload_toggle % 2 else payload_b
-                raw_path.write_bytes(raw)
+                raw_path = args.input if args.input is not None else (
+                    payload_a if payload_toggle % 2 else payload_b)
+                if args.input is None:
+                    raw_path.write_bytes(raw)
                 page.keyboard.press("Escape")     # 停上一轮播放，UI 回来
                 page.wait_for_selector("body.playing", state="detached",
                                        timeout=5000)
@@ -427,12 +498,13 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                 box: dict = {}
                 th = threading.Thread(target=receive_worker,
                                       args=(region, out_dir, raw, box),
-                                      kwargs={"backend": capture},
+                                      kwargs={"backend": capture,
+                                              "progress_dir": WORK_DIR / "progress" / f"{fps}_{rep}"},
                                       daemon=True)
                 th.start()
                 time.sleep(0.3)                   # 接收端就位（采集器打开）
                 t0 = time.perf_counter()
-                load_and_play(page, raw_path, fps)
+                load_and_play(page, raw_path, fps, args.bit_css, args.pad)
                 page.bring_to_front()
                 th.join(timeout=timeout_s)
                 wall = time.perf_counter() - t0
@@ -453,17 +525,21 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
 
                 if "result" in box:
                     result = box["result"]
-                    r = {"rep": rep, "fps": fps, "size_mib": SIZE_MIB,
+                    r = {"rep": rep, "fps": fps,
+                         "size_mib": round(len(raw) / 1024 / 1024, 3),
                          "failed": result.code != 0,
                          "wall_s": round(wall, 3),
                          "elapsed_s": round(result.elapsed, 3),
                          "received": result.received, "total": result.total,
                          "rejected": box["reporter"].rejected,
+                         "queue_produced": result.queue_produced,
+                         "queue_dropped": result.queue_dropped,
                          "sha_ok": bool(result.sha256) and
-                                   result.sha256 == hashlib.sha256(raw).hexdigest(),
+                                   result.sha256 == (fixed_sha or hashlib.sha256(raw).hexdigest()),
                          "error": result.error}
                 else:
-                    r = {"rep": rep, "fps": fps, "size_mib": SIZE_MIB,
+                    r = {"rep": rep, "fps": fps,
+                         "size_mib": round(len(raw) / 1024 / 1024, 3),
                          "failed": True, "wall_s": round(wall, 3),
                          "note": f"超时 {timeout_s:.0f}s 未还原（滞留线程随循环自行收尾）"}
                 tier["reps"].append(r)
@@ -484,8 +560,14 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "live-desktop",
         "capture": capture,
-        "fps_list": FPS_LIST, "size_mib": SIZE_MIB, "reps": REPS,
-        "calib_cycles": CALIB_CYCLES, "bit_css": BIT_CSS, "pad": PAD,
+        "input": str(args.input) if args.input is not None else None,
+        "input_bytes": len(fixed_raw) if fixed_raw is not None else None,
+        "input_sha256": fixed_sha,
+        "fps_list": FPS_LIST,
+        "size_mib": round(len(fixed_raw) / 1024 / 1024, 3)
+                    if fixed_raw is not None else SIZE_MIB,
+        "reps": REPS,
+        "calib_cycles": CALIB_CYCLES, "bit_css": args.bit_css, "pad": args.pad,
         "window": [win_w, win_h], "window_pos": [win_x, win_y],
         "region_pad_dip": REGION_PAD_DIP,
         "python": sys.version.split()[0],
@@ -501,12 +583,14 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
             "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["fps", "rep", "size_mib", "cycle_s", "wall_s", "elapsed_s",
-                    "received", "total", "rejected", "sha_ok", "failed"])
+                    "received", "total", "rejected", "queue_produced",
+                    "queue_dropped", "sha_ok", "failed"])
         for tier in runs:
             for r in tier["reps"]:
                 w.writerow([tier["fps"], r.get("rep"), r.get("size_mib"),
                             tier["cycle_s"], r.get("wall_s"), r.get("elapsed_s"),
                             r.get("received"), r.get("total"), r.get("rejected"),
+                            r.get("queue_produced"), r.get("queue_dropped"),
                             r.get("sha_ok"), r.get("failed")])
     print(f"\n结果已写入 {results_json} 与 {results_csv.name}")
     return 0

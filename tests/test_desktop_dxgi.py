@@ -9,6 +9,7 @@ iter_desktop(backend="dxgi") 与 StableFrameGate 的衔接复用既有 desktop
 
 import gzip
 import sys
+import time
 import zlib
 from itertools import islice
 from pathlib import Path
@@ -18,7 +19,8 @@ import numpy as np
 import pytest
 
 import fixture_encoder
-from receiver.sources.desktop import iter_desktop, _dxgi_capture
+from receiver.sources.desktop import (DXGIRecoveryError, iter_desktop,
+                                      _dxgi_capture)
 
 
 DXGI_LOST = object()
@@ -32,6 +34,8 @@ class FakeCamera:
         self.script = list(script)
         self.pos = 0
         self.released = False
+        self.started = False
+        self.start_calls = 0
 
     def grab(self, new_frame_only: bool = True):
         if self.pos >= len(self.script):
@@ -44,6 +48,17 @@ class FakeCamera:
 
     def release(self):
         self.released = True
+
+    def start(self, **kwargs):
+        self.start_calls += 1
+        self.started = True
+
+    @property
+    def is_capturing(self):
+        return self.started
+
+    def stop(self):
+        self.started = False
 
 
 class FakeDXCam:
@@ -92,6 +107,16 @@ def test_region_dict_to_ltrb(tmp_path, fake_dxcam):
     next(gen)
     gen.close()
     assert fake.created_with == {"output_color": "GRAY", "region": (10, 20, 310, 220)}
+
+
+def test_dxgi_uses_threaded_capture_mode(fake_dxcam):
+    """真实 dxcam 使用 start + 环形缓冲区，主循环不直接阻塞在 DXGI grab。"""
+    img = np.zeros((4, 4, 1), dtype=np.uint8)
+    fake = fake_dxcam([_gray3d(img)])
+    gen = _dxgi_capture(None)
+    next(gen)
+    gen.close()
+    assert fake.camera is not None and fake.camera.start_calls == 1
 
 
 def test_no_update_repeats_last_frame(tmp_path, fake_dxcam):
@@ -154,6 +179,121 @@ def test_grab_transient_exception_no_rebuild(fake_dxcam, monkeypatch):
     assert np.array_equal(out[1], out[2])   # 异常拍重发上一帧
     assert np.array_equal(out[3], b[:, :, 0])  # 恢复后新帧
     assert fake.create_count == 1           # 相机未被重建
+
+
+def test_persistent_access_lost_fails_fast(fake_dxcam, monkeypatch):
+    """持续 ACCESS_LOST 不得无限重试：达到恢复周期上限后明确失败，
+    上层才能切换 mss 或向用户报告，而不是静默卡死。"""
+    monkeypatch.setattr("receiver.sources.desktop.time.sleep", lambda _s: None)
+    monkeypatch.setattr("receiver.sources.desktop.DXGI_MAX_RECOVERY_CYCLES", 2)
+    a = np.full((8, 8, 1), 10, dtype=np.uint8)
+    fake_dxcam([_gray3d(a)] + [DXGI_LOST] * 5,
+               rebuild_script=[DXGI_LOST] * 5)
+    gen = _dxgi_capture(None)
+    assert np.array_equal(next(gen), a[:, :, 0])
+    with pytest.raises(DXGIRecoveryError):
+        for _ in range(12):
+            next(gen)
+    gen.close()
+
+
+def test_iter_desktop_falls_back_to_mss_after_persistent_access_lost(
+        fake_dxcam, monkeypatch):
+    """DXGI 持续失效时 desktop 源自动切 mss，任务继续产出画面。"""
+    monkeypatch.setattr("receiver.sources.desktop.time.sleep", lambda _s: None)
+    monkeypatch.setattr("receiver.sources.desktop.DXGI_MAX_RECOVERY_CYCLES", 1)
+    a = np.full((8, 8, 1), 10, dtype=np.uint8)
+    fake_dxcam([_gray3d(a)] + [DXGI_LOST] * 5)
+    mss_frames = iter([a[:, :, 0], a[:, :, 0]])
+    monkeypatch.setattr("receiver.sources.desktop._mss_capture",
+                        lambda _region: mss_frames)
+    gen = iter_desktop(backend="dxgi")
+    name, frame = next(gen)
+    gen.close()
+    assert name == "desktop-000001"
+    assert np.array_equal(frame, a[:, :, 0])
+
+
+def test_empty_dxgi_frames_fail_fast(monkeypatch):
+    """dxcam 不抛异常但连续返回 None 时同样必须触发恢复出口。"""
+    monkeypatch.setattr("receiver.sources.desktop.DXGI_EMPTY_TIMEOUT_S", 0.0)
+    monkeypatch.setattr("receiver.sources.desktop.time.sleep", lambda _s: None)
+    class EmptyCamera:
+        def grab(self, new_frame_only=True):
+            return None
+        def release(self):
+            pass
+    class EmptyDXCam:
+        def create(self, **kwargs):
+            return EmptyCamera()
+    monkeypatch.setitem(__import__("sys").modules, "dxcam", EmptyDXCam())
+    gen = _dxgi_capture(None)
+    with pytest.raises(DXGIRecoveryError):
+        next(gen)
+    gen.close()
+
+
+def test_dxgi_shutdown_is_bounded(monkeypatch):
+    """dxcam stop 卡住时，清理不能阻塞接收主循环。"""
+    from receiver.sources.desktop import _release_dxgi_camera
+
+    class StuckCamera:
+        released = False
+
+        def stop(self):
+            time.sleep(0.2)
+
+        def release(self):
+            self.released = True
+
+    monkeypatch.setattr("receiver.sources.desktop.DXGI_SHUTDOWN_TIMEOUT_S", 0.01)
+    camera = StuckCamera()
+    started = time.perf_counter()
+    _release_dxgi_camera(camera)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.1
+    assert not camera.released
+
+
+def test_stopped_threaded_capture_fails_even_with_stale_frame(fake_dxcam):
+    """采集线程停止但环形缓冲仍有旧帧时，也必须立即走恢复出口。"""
+    a = np.full((4, 4, 1), 10, dtype=np.uint8)
+    fake = fake_dxcam([_gray3d(a)])
+    gen = _dxgi_capture(None)
+    # 假相机首帧可读后模拟内部线程已退出；旧帧仍可能被 grab 返回。
+    next(gen)
+    assert fake.camera is not None
+    fake.camera.started = False
+    with pytest.raises(DXGIRecoveryError):
+        next(gen)
+    gen.close()
+
+
+def test_stalled_latest_frame_ticks_fail_fast(monkeypatch):
+    """DXGI 返回旧帧但时间戳不再推进时必须触发回退。"""
+    import sys
+
+    monkeypatch.setattr("receiver.sources.desktop.DXGI_FRAME_STALL_TIMEOUT_S", 0.0)
+    class StaleCamera:
+        is_capturing = True
+        latest_frame_ticks = 1
+        def start(self, **kwargs):
+            pass
+        def grab(self, **kwargs):
+            return np.zeros((4, 4, 1), dtype=np.uint8)
+        def stop(self):
+            pass
+        def release(self):
+            pass
+    class StaleDXCam:
+        def create(self, **kwargs):
+            return StaleCamera()
+    monkeypatch.setitem(sys.modules, "dxcam", StaleDXCam())
+    gen = _dxgi_capture(None)
+    next(gen)
+    with pytest.raises(DXGIRecoveryError):
+        next(gen)
+    gen.close()
 
 
 def test_create_exception_retries(fake_dxcam, monkeypatch):

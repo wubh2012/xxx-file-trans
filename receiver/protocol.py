@@ -11,6 +11,27 @@ HEADER_BYTES = HEADER_BITS // 8
 SYNC = 0xF0A5
 VER = 0x01
 FRAME_NO_METADATA = 0xFFFFFF  # 元数据帧哨兵（§4）
+FLAGS_GZIP = 0x8000
+FLAGS_FEC = 0x4000
+FLAGS_ALLOWED = FLAGS_GZIP | FLAGS_FEC
+
+# 前向纠错参数（协议 §8）：每 32 个数据帧附带 2 个校验帧，可恢复同组
+# 最多 2 个缺失数据帧。参数固定在协议中，避免再占用已冻结帧头字段。
+FEC_GROUP_SIZE = 32
+FEC_PARITY_FRAMES = 2
+
+
+def fec_parity_count(total_frames: int) -> int:
+    """返回一轮播放需要的 FEC 校验帧数。"""
+    if total_frames <= 0:
+        return 0
+    groups = (total_frames + FEC_GROUP_SIZE - 1) // FEC_GROUP_SIZE
+    return groups * FEC_PARITY_FRAMES
+
+
+def is_fec_frame(frame_no: int, total_frames: int) -> bool:
+    """帧号是否落在当前文件的校验帧编号区间。"""
+    return total_frames <= frame_no < total_frames + fec_parity_count(total_frames)
 
 
 class FrameRejected(Exception):

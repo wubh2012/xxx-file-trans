@@ -42,12 +42,12 @@ class TestBuildCommand:
         """desktop 源：具体坐标版命令（issue #26 验收），与 parse_region 可回灌。"""
         cmd = build_command("desktop", region={"left": 17, "top": 197,
                                                "width": 1845, "height": 578})
-        assert cmd == "python -m receiver receive --source desktop --region 17,197,1845,578"
+        assert cmd == "python -m receiver receive --source desktop --capture auto --region 17,197,1845,578"
 
     def test_desktop_fullscreen_omits_region(self):
         """region None（整屏）→ 省略 --region，与 CLI 缺省语义一致。"""
         assert build_command("desktop", region=None) == \
-            "python -m receiver receive --source desktop"
+            "python -m receiver receive --source desktop --capture auto"
 
     def test_images_quotes_path(self):
         """images 源：路径参数加引号（含空格路径可直接粘贴）。"""
@@ -296,13 +296,13 @@ class TestTkinterShellSmoke:
     def test_constructs_with_desktop_command(self, shell):
         """初始 desktop 源：窗口构造即出整屏命令（无坐标省略 --region）。"""
         assert shell.command_var.get() == \
-            "python -m receiver receive --source desktop"
+            "python -m receiver receive --source desktop --capture auto"
 
     def test_pick_fill_text_drives_command(self, shell):
         """框选回填（等价于手填坐标）→ 命令带具体坐标，与实际参数一致。"""
         shell.region_var.set("17,197,1845,578")
         assert shell.command_var.get() == \
-            "python -m receiver receive --source desktop --region 17,197,1845,578"
+            "python -m receiver receive --source desktop --capture auto --region 17,197,1845,578"
 
     def test_source_switch_and_images_command(self, shell, tmp_path):
         """切 images 源 + 填目录 → 参数帧切换、命令联动（含引号路径）。"""

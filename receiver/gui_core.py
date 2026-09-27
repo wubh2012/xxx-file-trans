@@ -46,7 +46,8 @@ def build_command(source: str, *, frames_dir=None, video=None, region=None) -> s
     含空格路径可直接粘贴到 PowerShell / 终端。
     """
     if source == "desktop":
-        cmd = f"{COMMAND_PREFIX} --source desktop"
+        # 与 CLI 当前默认一致：Windows 优先 DXGI，不可用时回退 mss。
+        cmd = f"{COMMAND_PREFIX} --source desktop --capture auto"
         if region is not None:
             cmd += f" --region {format_region(region)}"
         return cmd
@@ -223,11 +224,12 @@ class ReceiveJob:
     """
 
     def __init__(self, frames_factory, out_dir: Path, events: queue.Queue,
-                 notify=None):
+                 notify=None, prefetch: bool = False):
         self._frames_factory = frames_factory
         self._out_dir = Path(out_dir)
         self._events = events
         self._notify = notify
+        self._prefetch = prefetch
         self._stop_flag = threading.Event()
 
     def start(self) -> None:
@@ -246,10 +248,16 @@ class ReceiveJob:
                 reporter_factory=lambda: QueuedReporter(self._events),
                 notify=self._notify,
                 stop_check=self._stop_flag.is_set,
+                prefetch=self._prefetch,
             )
         except Exception as e:  # 兜底：取帧源打不开等异常转错误结果
             result = ReceiveResult(code=1, error=f"接收异常：{e}")
         finally:
             if frames is not None and hasattr(frames, "close"):
-                frames.close()  # 协作停止后生成器不再被消费，显式关闭释放 mss / VideoCapture
+                try:
+                    frames.close()  # 协作停止后生成器不再被消费，显式释放采集资源
+                except ValueError:
+                    # C3 生产者线程可能正在 generator.next()；停止标志已置位，
+                    # 跨线程 close 失败时由生产者自行在下一次取帧后退出。
+                    pass
             self._events.put(("done", result))

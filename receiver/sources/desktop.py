@@ -8,18 +8,63 @@ StableFrameGate（变化检测 + 稳定两帧判定 + 超时强制解码，与 v
 DPI 感知（需求 F10）：Windows 下先声明 per-monitor DPI awareness，
 mss 才能拿到物理像素坐标，`--region` 与屏幕实际区域逐像素对齐。
 
-采集后端（issue #31 B2）：`--capture mss`（默认，全屏拷贝）或 `dxgi`
-（Desktop Duplication，经 dxcam；静屏不重复拷贝、新帧延迟亚毫秒）。
+采集后端（issue #31 B2）：`--capture auto`（Windows 优先 DXGI，不可用时
+回退 mss）、`mss`（全屏拷贝）或 `dxgi`（Desktop Duplication，经 dxcam；
+静屏不重复拷贝、新帧延迟亚毫秒）。
 """
 
 import ctypes
 import sys
+import threading
 import time
 
 import cv2
 import numpy as np
 
 from receiver.sources.stable import StableFrameGate
+
+
+class DXGIRecoveryError(RuntimeError):
+    """DXGI 在限定恢复周期内仍不可用，可由 desktop 源回退 mss。"""
+
+
+# 连续 ACCESS_LOST 会释放并重建 dxcam；超过上限说明显示输出仍在切换，
+# 继续自旋只会长期占住接收线程并阻塞正式接收。
+DXGI_MAX_RECOVERY_CYCLES = 3
+# dxcam 在部分显示输出切换中不抛异常而连续返回 None；超过此窗口视为
+# duplication 已失效，触发与异常路径相同的 mss 降级。
+DXGI_EMPTY_TIMEOUT_S = 5.0
+DXGI_FRAME_STALL_TIMEOUT_S = 5.0
+DXGI_SHUTDOWN_TIMEOUT_S = 0.5
+
+
+def _release_dxgi_camera(camera) -> None:
+    """先停 threaded capture 再释放 DXGI 资源，避免残留线程抢占单例。"""
+    if camera is None:
+        return
+    stop = getattr(camera, "stop", None)
+    if stop is not None:
+        done = threading.Event()
+
+        def stop_worker():
+            try:
+                stop()
+            except Exception:  # noqa: BLE001 释放阶段不覆盖原始错误
+                pass
+            finally:
+                done.set()
+
+        threading.Thread(target=stop_worker, daemon=True,
+                         name="dxgi-stop").start()
+        if not done.wait(DXGI_SHUTDOWN_TIMEOUT_S):
+            # dxcam 的内部采集线程可能卡在 AcquireNextFrame；不能让接收
+            # 主循环同步等待。旧实例由其 daemon 线程自行结束，当前任务
+            # 继续走 mss 回退。
+            return
+    try:
+        camera.release()
+    except Exception:  # noqa: BLE001  释放阶段不覆盖原始错误
+        pass
 
 
 def parse_region(text: str) -> dict:
@@ -74,7 +119,8 @@ def _mss_capture(region: dict | None):
             yield cv2.cvtColor(np.asarray(shot), cv2.COLOR_BGRA2GRAY)
 
 
-def _dxgi_capture(region: dict | None):
+def _dxgi_capture(region: dict | None,
+                  max_recovery_cycles: int | None = None):
     """DXGI Desktop Duplication 采集适配器（issue #31 B2）：DXcam 一次性
     grab 循环。屏幕无更新时 grab 返回 None（不重复全屏拷贝，与 mss 的
     本质差异），此时重发上一帧——保持与 mss 相同的「重复捕获同一画面」
@@ -103,11 +149,27 @@ def _dxgi_capture(region: dict | None):
     last = None
     create_failures = 0
     grab_failures = 0
+    recovery_cycles = 0
+    empty_since = None
+    threaded_capture = False
+    frame_stall_since = None
+    last_frame_ticks = None
+    has_frame_ticks = False
+    if max_recovery_cycles is None:
+        max_recovery_cycles = DXGI_MAX_RECOVERY_CYCLES
     try:
         while True:
             if camera is None:
                 try:
                     camera = dxcam.create(output_color="GRAY", region=cam_region)
+                    # dxcam 的 threaded capture 将 DXGI 触碰隔离到其采集线程；
+                    # 主线程只从环形缓冲区取最新帧，避免 ACCESS_LOST 时
+                    # camera.grab() 把接收主循环永久阻塞。
+                    start = getattr(camera, "start", None)
+                    if start is not None:
+                        start(target_fps=120, video_mode=True)
+                        threaded_capture = True
+                        has_frame_ticks = hasattr(camera, "latest_frame_ticks")
                     create_failures = 0
                 except Exception:  # noqa: BLE001  过渡期重建同样可能失效
                     create_failures += 1
@@ -128,18 +190,47 @@ def _dxgi_capture(region: dict | None):
                         yield last.reshape(last.shape[0], last.shape[1])
                     time.sleep(0.2)
                     continue
-                try:  # 连续失败才重建：release 后单例注册表丢弃旧实例
-                    camera.release()
-                except Exception:  # noqa: BLE001  释放失败不阻断重建
-                    pass
+                # 连续失败才重建：先停 threaded capture，再释放单例实例。
+                _release_dxgi_camera(camera)
                 camera = None
                 grab_failures = 0
+                recovery_cycles += 1
+                if recovery_cycles >= max_recovery_cycles:
+                    raise DXGIRecoveryError(
+                        "DXGI 显示输出在恢复周期内仍不可用（ACCESS_LOST）；"
+                        "将回退 mss 抓屏"
+                    ) from None
                 time.sleep(0.2)  # 等系统过渡完成再重建
                 continue
+            if threaded_capture and not getattr(camera, "is_capturing", True):
+                raise DXGIRecoveryError(
+                    "DXGI threaded capture 线程已停止（ACCESS_LOST）；将回退 mss 抓屏"
+                ) from None
+            if threaded_capture and has_frame_ticks:
+                ticks = getattr(camera, "latest_frame_ticks", None)
+                now = time.monotonic()
+                if ticks is None or ticks == last_frame_ticks:
+                    if frame_stall_since is None:
+                        frame_stall_since = now
+                    elif now - frame_stall_since >= DXGI_FRAME_STALL_TIMEOUT_S:
+                        raise DXGIRecoveryError(
+                            "DXGI 最新帧时间戳超过恢复窗口未推进；将回退 mss 抓屏"
+                        ) from None
+                else:
+                    last_frame_ticks = ticks
+                    frame_stall_since = now
             if frame is not None:
                 last = frame
+                recovery_cycles = 0
+                empty_since = None
                 yield frame.reshape(frame.shape[0], frame.shape[1])  # (H,W,1) → (H,W)
                 continue
+            if empty_since is None:
+                empty_since = time.monotonic()
+            elif time.monotonic() - empty_since >= DXGI_EMPTY_TIMEOUT_S:
+                raise DXGIRecoveryError(
+                    "DXGI 连续空帧超过恢复窗口（ACCESS_LOST）；将回退 mss 抓屏"
+                ) from None
             if last is None:
                 time.sleep(0.05)  # 首帧未到（静屏）：等屏幕活动
                 continue
@@ -147,23 +238,54 @@ def _dxgi_capture(region: dict | None):
             time.sleep(0.004)  # 重发节奏钳制（静屏期 ~250Hz 上限，不忙转）
     finally:
         if camera is not None:
-            camera.release()
+            _release_dxgi_camera(camera)
 
 
-def iter_desktop(region: dict | None = None, capture=None, backend: str = "mss"):
-    """desktop 源迭代器：capture 缺省按 backend 真实抓屏（mss / dxgi），
+def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto"):
+    """desktop 源迭代器：capture 缺省按 backend 真实抓屏（auto / mss / dxgi），
     测试可注入图像序列。关闭时显式 close 内层采集生成器（释放抓屏资源，
     不依赖 GC 终结时机）。"""
-    gate = StableFrameGate()
+    # 30 FPS 时 mss 抓屏 + 解码的串行周期可能大于发送帧周期，稳定两帧
+    # 永远无法命中，旧的 5s 超时会表现为“识别卡住”。桌面源的 CRC 已经
+    # 会拦截撕裂/过渡画面，因此把强制放行窗口压到 80ms：低 FPS 仍优先
+    # 走稳定两帧，高 FPS 则至少每个短窗口把最新候选交给 CRC 判定。
+    gate = StableFrameGate(timeout_s=0.08)
     seq = 0
+    capture_backend = backend
     if capture is None:
+        if backend == "auto":
+            # DXGI 仅 Windows 可用；导入失败（未安装 dxcam / 非 Windows）
+            # 自动回退 mss，保持原有跨平台行为。
+            if sys.platform != "win32":
+                backend = "mss"
+            else:
+                try:
+                    import dxcam  # noqa: F401
+                except (ImportError, OSError, RuntimeError):
+                    backend = "mss"
+                else:
+                    backend = "dxgi"
         capture = _dxgi_capture(region) if backend == "dxgi" else _mss_capture(region)
+        capture_backend = backend
     try:
-        for gray in capture:
-            out = gate.feed(gray)
-            if out is not None:
-                seq += 1
-                yield f"desktop-{seq:06d}", out
+        while True:
+            try:
+                for gray in capture:
+                    out = gate.feed(gray)
+                    if out is not None:
+                        seq += 1
+                        yield f"desktop-{seq:06d}", out
+                return
+            except DXGIRecoveryError:
+                if capture_backend != "dxgi":
+                    raise
+                # 旧 duplication 已在 _dxgi_capture 的 finally 中释放；
+                # 这里切换到 mss 继续同一闸门和接收任务，不丢整场任务。
+                close = getattr(capture, "close", None)
+                if close is not None:
+                    close()
+                capture_backend = "mss"
+                capture = _mss_capture(region)
     finally:
         close = getattr(capture, "close", None)
         if close is not None:

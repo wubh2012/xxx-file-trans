@@ -31,7 +31,7 @@ class PickCancelled(Exception):
     """--region pick 用户取消（Esc / 关闭覆盖窗）：明确中止，不回退整屏（issue #22）。"""
 
 
-def receive_frames(args, frames, notify=None) -> int:
+def receive_frames(args, frames, notify=None, *, prefetch: bool = False) -> int:
     """接收主循环 CLI 壳（issue #26 重构）：核心逻辑在 receiver.run.run_receive
     （与 tkinter GUI 共用），本壳只按 ReceiveResult 字段渲染 CLI 文本，
     输出契约（issue #25 摘要口径）不变。
@@ -39,7 +39,8 @@ def receive_frames(args, frames, notify=None) -> int:
     notify 为可注入的完成通知边界（issue #12）：还原成功后以
     notify(title, message) 报喜，失败路径不调用；None 时不通知
     （真实默认实现见 receiver.notify）。"""
-    result = run_receive(frames, Path(args.out), notify=notify)
+    result = run_receive(frames, Path(args.out), notify=notify,
+                         prefetch=prefetch)
     if result.error:
         print(result.error, file=sys.stderr)
     if result.incomplete:
@@ -87,9 +88,9 @@ def _add_source_args(p) -> None:
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
-    p.add_argument("--capture", choices=["mss", "dxgi"], default="mss",
-                   help="desktop 源采集后端：mss 全屏拷贝（默认）或 dxgi "
-                        "Desktop Duplication（B2，低延迟静屏零拷贝；region 以主输出为基准）")
+    p.add_argument("--capture", choices=["auto", "mss", "dxgi"], default="auto",
+                   help="desktop 源采集后端：auto 在 Windows 优先 DXGI、不可用时回退 mss；"
+                        "也可显式指定 mss 全屏拷贝或 dxgi Desktop Duplication（region 以主输出为基准）")
 
 
 def _desktop_region(parser, args) -> dict | None:
@@ -182,7 +183,8 @@ def main(argv=None) -> int:
     # 不依赖 cwd；显式 --out 语义不变
     _anchor_dirs(args)
     try:
-        return receive_frames(args, frames, notify=notify)
+        return receive_frames(args, frames, notify=notify,
+                              prefetch=(args.source == "desktop"))
     except ValueError as e:
         # video 源打不开（不存在 / 编码器不支持）：显式报错，不静默零帧；
         # 生成器惰性打开，首次迭代才抛，故包住消费端

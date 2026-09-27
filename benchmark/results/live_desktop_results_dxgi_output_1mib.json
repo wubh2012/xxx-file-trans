@@ -1,0 +1,114 @@
+{
+  "meta": {
+    "generated_at": "2026-09-26T02:26:18.465485+00:00",
+    "mode": "live-desktop",
+    "capture": "dxgi",
+    "input": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\bench_sizes\\bench_1mib.bin",
+    "input_bytes": 1048576,
+    "input_sha256": "a201d74fd3956c2a21065ed2be405b12239f978a3d35f90a7c78a78da6f6b637",
+    "fps_list": [
+      30
+    ],
+    "size_mib": 1.0,
+    "reps": 1,
+    "calib_cycles": 1,
+    "bit_css": 6,
+    "pad": 3,
+    "window": [
+      1536,
+      816
+    ],
+    "window_pos": [
+      0,
+      0
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）"
+  },
+  "calibrations": [
+    {
+      "fps": 30,
+      "calib_s": 24.6,
+      "measuredFps": {
+        "median": 29.15,
+        "p5": 21.04,
+        "p95": 42.73
+      },
+      "report": {
+        "frames": 672,
+        "decoded": 671,
+        "decodeRate": 0.9985119047619048,
+        "crcReached": 671,
+        "crcPassed": 671,
+        "crcRate": 1.0,
+        "rejected": {
+          "geometry": 1
+        },
+        "probed": 671,
+        "measuredBit": 8,
+        "measuredPad": 3,
+        "residualPx": 0,
+        "BIT": 8,
+        "PAD": 3,
+        "transfers": [
+          {
+            "fileId": "0x72D6ABBB",
+            "totalFrames": 432,
+            "received": 624,
+            "unique": 432,
+            "missing": 0,
+            "missingRate": 0.0,
+            "duplicates": 192,
+            "cycles": 1
+          }
+        ],
+        "measuredFps": {
+          "median": 29.15,
+          "p5": 21.04,
+          "p95": 42.73
+        },
+        "interrupted": false
+      },
+      "verdict": "缺帧 0/432：实测干净，可尝试再上一档"
+    }
+  ],
+  "runs": [
+    {
+      "fps": 30,
+      "geo": {
+        "fps": 30,
+        "bit": 8,
+        "cols": 216,
+        "rows": 91,
+        "chunk": 2431,
+        "total": 432
+      },
+      "cycle_s": 14.6,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 81,
+        "width": 1920,
+        "height": 976
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 30,
+          "size_mib": 1.0,
+          "failed": false,
+          "wall_s": 16.77,
+          "elapsed_s": 16.614,
+          "received": 432,
+          "total": 432,
+          "rejected": 2,
+          "queue_produced": 465,
+          "queue_dropped": 0,
+          "sha_ok": true,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

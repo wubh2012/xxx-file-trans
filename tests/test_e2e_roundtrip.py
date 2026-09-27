@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,7 +31,7 @@ PYTHON = ROOT / "venv" / "Scripts" / "python.exe"
 if not PYTHON.is_file():  # 非 Windows / 无 venv 时退回当前解释器
     PYTHON = Path(sys.executable)
 
-SOURCE_BYTES = os.urandom(8000)  # 随机数据 gzip 后近似原长 → 必然多帧
+SOURCE_BYTES = os.urandom(12000)  # BIT/PAD 默认优化后仍保证至少 3 个数据帧，覆盖双帧 FEC 恢复
 
 
 def run_receive(frames_dir: Path, out_dir: Path) -> subprocess.CompletedProcess:
@@ -68,8 +69,9 @@ def exported(tmp_path_factory):
         page.keyboard.press("Escape")                          # 停止播放，露出导出按钮
 
         total_frames = page.evaluate("() => window.__sender.state.totalFrames")
-        # 文件数 = 数据帧 + 按节奏插入的元数据帧（§4：0/100/200… 前各一帧） + frames.json
-        expected = total_frames + (total_frames + 99) // 100 + 1
+        # 文件数 = 数据帧 + 元数据帧 + FEC 校验帧 + frames.json
+        fec = (total_frames + 31) // 32 * 2
+        expected = total_frames + (total_frames + 99) // 100 + fec + 1
 
         page.click("#exportBtn")
         downloads = []
@@ -105,7 +107,8 @@ def test_export_layout_and_frames_json(exported):
     assert frames_json["plainSize"] == len(SOURCE_BYTES)
     assert frames_json["totalExported"] == (
         frames_json["totalFrames"] + (frames_json["totalFrames"] + 99) // 100
-    ), "PNG 帧数应等于数据帧 + 按节奏插入的元数据帧"
+        + frames_json["fec"]["totalParityFrames"]
+    ), "PNG 帧数应等于数据帧 + 元数据帧 + FEC 校验帧"
     assert frames_json["receiverCommand"] == (
         "python -m receiver receive --source images --dir frames_png --out output"
     ), "receiverCommand 应为与复制按钮同源的 images 模式命令（F8，issue #18）"
@@ -139,3 +142,34 @@ def test_ferried_file_sha256_roundtrip(exported, tmp_path):
     assert files[0].name == "ferry.bin"
     assert hashlib.sha256(files[0].read_bytes()).digest() \
         == hashlib.sha256(SOURCE_BYTES).digest(), "还原文件 sha256 与源文件不一致"
+
+
+def test_fec_recovers_two_missing_browser_data_frames(exported, tmp_path):
+    """发送端真实浏览器产出的两个校验帧能恢复同组两个缺失数据帧。"""
+    import cv2
+
+    from receiver.pipeline import decode_frame
+    from receiver.protocol import FLAGS_FEC, FRAME_NO_METADATA
+
+    damaged = tmp_path / "frames_missing_two"
+    damaged.mkdir()
+    removed = []
+    for src in sorted((exported / "frames_png").iterdir()):
+        img = cv2.imread(str(src), cv2.IMREAD_GRAYSCALE)
+        frame = decode_frame(img)
+        is_data = (frame.header.frame_no != FRAME_NO_METADATA
+                   and not (frame.header.flags & FLAGS_FEC))
+        if is_data and frame.header.frame_no in (0, 2):
+            removed.append(frame.header.frame_no)
+            continue
+        shutil.copy2(src, damaged / src.name)
+    assert removed == [0, 2]
+
+    out = tmp_path / "fec_output"
+    result = run_receive(damaged, out)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    restored = out / "ferry.bin"
+    assert restored.is_file()
+    assert hashlib.sha256(restored.read_bytes()).digest() \
+        == hashlib.sha256(SOURCE_BYTES).digest()

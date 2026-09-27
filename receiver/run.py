@@ -12,6 +12,8 @@ stop_check 为协作式停止缝——逐帧检查，置真即停，已收帧照
 """
 
 import hashlib
+import queue
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,17 +42,126 @@ class ReceiveResult:
     error: str | None = None  # 失败原因（code 1 且非停止）
     incomplete: str | None = None  # 未完成统计行（#25 口径，失败 / 停止路径）
     warnings: list[str] = field(default_factory=list)  # 非致命告警（清理 / 通知失败）
+    queue_produced: int = 0  # C3：生产者产出的候选帧数
+    queue_dropped: int = 0  # C3：有界队列为保留最新帧而丢弃的候选帧数
+
+
+@dataclass
+class FrameQueueStats:
+    """C3 预取层的可观测统计，不参与协议或还原判据。"""
+
+    produced: int = 0
+    enqueued: int = 0
+    dropped: int = 0
+
+
+class PrefetchedFrames:
+    """将取帧源与解码消费者解耦的有界“最新帧”队列。
+
+    该层只用于实时 desktop 源：消费者跟不上时丢弃队列中较旧的候选，
+    让解码器尽快看到最新画面。images/video 等有限源默认不启用，避免
+    为了吞吐而改变离线帧序列的完整性语义。
+    """
+
+    _END = object()
+
+    def __init__(self, frames, *, maxsize: int = 2):
+        if maxsize < 1:
+            raise ValueError("maxsize 必须 ≥ 1")
+        self._frames = frames
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.stats = FrameQueueStats()
+        self.error: BaseException | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._produce, daemon=True, name="frame-producer"
+        )
+        self._thread.start()
+
+    def _produce(self) -> None:
+        try:
+            for item in self._frames:
+                if self._stop.is_set():
+                    break
+                self.stats.produced += 1
+                try:
+                    self._queue.put_nowait(item)
+                except queue.Full:
+                    # 实时画面只保留最新候选；解码器不会继续处理已经
+                    # 过时的屏幕画面。丢弃量单独统计，不能与 CRC 拒帧混淆。
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
+                        self.stats.dropped += 1
+                    try:
+                        self._queue.put_nowait(item)
+                    except queue.Full:
+                        # 消费者刚好取走/竞争时，宁可记录一次丢弃也不阻塞
+                        # 生产线程；下一轮会继续尝试。
+                        self.stats.dropped += 1
+                        continue
+                self.stats.enqueued += 1
+        except BaseException as exc:  # 在消费者线程重新抛出，保留原异常
+            self.error = exc
+        finally:
+            if not self._stop.is_set():
+                while True:
+                    try:
+                        self._queue.put(self._END, timeout=0.05)
+                        break
+                    except queue.Full:
+                        if self._stop.is_set():
+                            break
+
+    def __iter__(self):
+        self.start()
+        return self
+
+    def __next__(self):
+        item = self._queue.get()
+        if item is self._END:
+            if self.error is not None:
+                raise self.error
+            raise StopIteration
+        return item
+
+    def close(self) -> None:
+        self._stop.set()
+        close = getattr(self._frames, "close", None)
+        if close is not None:
+            try:
+                close()
+            except ValueError:
+                # 生成器正在生产者线程中执行时，Python 禁止跨线程 close；
+                # stop 标志仍会让生产者在下一次取帧后退出。
+                pass
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=0.5)
 
 
 def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
-                notify=None, stop_check=None) -> ReceiveResult:
+                notify=None, stop_check=None, *, prefetch: bool = False,
+                prefetch_size: int = 2) -> ReceiveResult:
     """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器。
 
     reporter_factory 返回 ProgressReporter 同接口对象（上下文管理器 +
     on_decoded / on_rejected / set_total / finish，issue #26 注入缝）；
     stop_check 非 None 时逐帧调用，返回真即协作式停止。
+    prefetch 为真时启用 C3 有界生产者/消费者队列，适用于实时 desktop
+    源；prefetch_size 为队列容量，默认只保留少量最新候选帧。
     """
     out_dir = Path(out_dir)
+    prefetched = PrefetchedFrames(frames, maxsize=prefetch_size) if prefetch else None
+    stream = prefetched if prefetched is not None else frames
+    if prefetched is not None:
+        prefetched.start()
     # 断点续传（issue #7）：任务目录锚定 progress/，首个数据帧落地即锁定，
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
@@ -58,19 +169,23 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
 
     def fail(msg: str | None, *, stopped: bool = False) -> ReceiveResult:
         """统一未完成出口：失败原因 + 未完成统计（issue #25），退出码 1。"""
-        return ReceiveResult(
+        result = ReceiveResult(
             code=1, stopped=stopped, error=msg,
             received=store.received_count(), total=store.total_frames,
             incomplete=incomplete_summary(timer.elapsed,
                                           store.received_count(), store.total_frames),
         )
+        if prefetched is not None:
+            result.queue_produced = prefetched.stats.produced
+            result.queue_dropped = prefetched.stats.dropped
+        return result
 
     stopped = False
     geo_cache = GeometryCache()  # 角标检测缓存（issue #30 C1）：会话内帧间几何不变
     try:
         with reporter_factory() as reporter:
             try:
-                for name, img in frames:
+                for name, img in stream:
                     if stop_check is not None and stop_check():
                         stopped = True
                         break
@@ -100,6 +215,8 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                 return fail("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧")
             reporter.finish()
     finally:
+        if prefetched is not None:
+            prefetched.close()
         store.close()
 
     if stopped and not store.is_complete():
@@ -128,6 +245,9 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
             elapsed=elapsed, received=store.received_count(),
             total=store.total_frames, sha256=hashlib.sha256(plain).hexdigest(),
         )
+        if prefetched is not None:
+            result.queue_produced = prefetched.stats.produced
+            result.queue_dropped = prefetched.stats.dropped
         # payload 清理（issue #12）：还原成功后任务目录不再有续传价值，删除残留；
         # 失败仅告警，不推翻已成功的还原
         try:

@@ -22,8 +22,15 @@ from collections import OrderedDict
 from pathlib import Path
 
 from receiver.metadata import FileMetadata
+from receiver.fec import recover_one, recover_two
 from receiver.pipeline import DecodedFrame, FrameHeader
-from receiver.protocol import FRAME_NO_METADATA, FrameRejected
+from receiver.protocol import (
+    FEC_GROUP_SIZE,
+    FEC_PARITY_FRAMES,
+    FLAGS_FEC,
+    FRAME_NO_METADATA,
+    FrameRejected,
+)
 
 
 class IncompleteError(Exception):
@@ -53,6 +60,8 @@ class FrameStore:
         self.task_dir: Path | None = None
         self._bitmap: bytearray | None = None
         self._data_file = None
+        self._bitmap_file = None
+        self._fec_parity: dict[tuple[int, int], bytes] = {}
         self._metadata_file_id: int | None = None  # 元数据帧所属 fileId（防异帧毒化）
 
     # ---------- 收帧 ----------
@@ -69,6 +78,18 @@ class FrameStore:
             self._metadata_file_id = h.file_id
             self._write_meta()
             return False
+        if h.flags & FLAGS_FEC:
+            if self.file_id is None:
+                self._lock(h)
+            self._validate_against_lock(h)
+            parity_no = h.frame_no - h.total_frames
+            group, parity_index = divmod(parity_no, FEC_PARITY_FRAMES)
+            key = (group, parity_index)
+            if key in self._fec_parity:
+                return False
+            self._fec_parity[key] = frame.payload
+            self._recover_group(group)
+            return False
         if self.file_id is None:
             self._lock(h)
         self._validate_against_lock(h)
@@ -76,6 +97,8 @@ class FrameStore:
             return False
         self._persist_frame(h.frame_no, frame.payload)
         self._frames[h.frame_no] = frame.payload
+        # 校验帧可能先于数据帧到达；每个新数据帧落地后都重新尝试本组恢复。
+        self._recover_group(h.frame_no // FEC_GROUP_SIZE)
         return True
 
     # ---------- 锁定与持久化 ----------
@@ -102,6 +125,7 @@ class FrameStore:
         self._data_file.truncate(self.total_frames * self.chunk_size)
         self._bitmap = bytearray((self.total_frames + 7) // 8)
         (self.task_dir / "received.bin").write_bytes(bytes(self._bitmap))
+        self._bitmap_file = open(self.task_dir / "received.bin", "r+b")
         self._write_meta()
 
     def _adopt_lock(self, h: FrameHeader) -> None:
@@ -158,6 +182,7 @@ class FrameStore:
             self._metadata_file_id = self.file_id
         self._bitmap = bytearray(raw_bitmap)
         self._data_file = open(data_path, "r+b")
+        self._bitmap_file = open(recv_path, "r+b")
         for n in range(total):
             if self._bit_get(n):
                 self._frames[n] = self._read_frame(n)
@@ -197,8 +222,46 @@ class FrameStore:
         self._data_file.seek(n * self.chunk_size)
         self._data_file.write(payload)
         self._data_file.flush()
-        self._bitmap[n >> 3] |= 1 << (7 - (n & 7))
-        (self.task_dir / "received.bin").write_bytes(bytes(self._bitmap))
+        byte_index = n >> 3
+        self._bitmap[byte_index] |= 1 << (7 - (n & 7))
+        # 旧实现每个新帧都重写整个 received.bin；大文件下这会放大同步
+        # 写盘次数。位图是定长文件，只需原地更新一个字节，崩溃语义不变：
+        # data.bin 已写入后才提交该帧的收口标记。
+        self._bitmap_file.seek(byte_index)
+        self._bitmap_file.write(bytes((self._bitmap[byte_index],)))
+        self._bitmap_file.flush()
+
+    def _recover_group(self, group: int) -> None:
+        """用已收到的校验帧恢复同组最多两个缺失数据帧。"""
+        if self.total_frames is None or self.chunk_size is None:
+            return
+        start = group * FEC_GROUP_SIZE
+        count = min(FEC_GROUP_SIZE, self.total_frames - start)
+        if count <= 0:
+            return
+        parts: list[bytes | None] = []
+        for n in range(start, start + count):
+            raw = self._frames.get(n)
+            parts.append(None if raw is None else raw.ljust(self.chunk_size, b"\x00"))
+        missing = [i for i, part in enumerate(parts) if part is None]
+        if not missing or len(missing) > FEC_PARITY_FRAMES:
+            return
+        parity0 = self._fec_parity.get((group, 0))
+        if parity0 is None:
+            return
+        if len(missing) == 1:
+            recovered = [recover_one(parity0, parts)]
+        else:
+            parity1 = self._fec_parity.get((group, 1))
+            if parity1 is None:
+                return
+            first, second = recover_two(parity0, parity1, parts,
+                                        (missing[0], missing[1]))
+            recovered = [first, second]
+        for relative, payload in zip(missing, recovered):
+            frame_no = start + relative
+            self._persist_frame(frame_no, payload)
+            self._frames[frame_no] = payload
 
     def _read_frame(self, n: int) -> bytes:
         self._data_file.seek(n * self.chunk_size)
@@ -235,6 +298,9 @@ class FrameStore:
         if self._data_file is not None:
             self._data_file.close()
             self._data_file = None
+        if self._bitmap_file is not None:
+            self._bitmap_file.close()
+            self._bitmap_file = None
 
     def cleanup_task(self) -> None:
         """清理本任务 payload 残留（issue #12）：还原成功后删除整个任务目录

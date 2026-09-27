@@ -74,6 +74,22 @@ def test_timeout_not_fired_within_window():
     assert g.feed(img(3), now=9.9) is None
 
 
+def test_high_rate_unique_frames_are_forced_through_short_window():
+    """高 FPS 抓屏每次可能只采到一个新画面，桌面源的 80ms 窗口不能再
+    退化成旧实现的 5 秒一次放行。CRC 会在后续流水线拦截过渡坏帧，闸门
+    只负责保证候选不会长时间饿死。"""
+    g = StableFrameGate(timeout_s=0.08)
+    rng = np.random.default_rng(123)
+    emitted = []
+    for i in range(30):  # 1 秒、30 FPS，每次画面都不同
+        out = g.feed(rng.integers(0, 256, (16, 16), dtype=np.uint8), now=i / 30)
+        if out is not None:
+            emitted.append(i)
+    assert emitted, "唯一新画面不应等到 5 秒超时才首次放行"
+    assert max(b - a for a, b in zip(emitted, emitted[1:])) <= 4, \
+        "短窗口应持续放行候选，而非每 5 秒跳一次"
+
+
 def test_small_noise_treated_as_same_frame():
     """微幅噪点（幅度 ≤ tol 的少量像素）视为同帧：稳定判定与变化检测都免疫。"""
     g = StableFrameGate()

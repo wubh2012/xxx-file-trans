@@ -211,7 +211,7 @@ def test_cli_desktop_dispatch_passes_region(monkeypatch):
     rc = main(["receive", "--source", "desktop", "--region", "15,25,320,240"])
     assert rc == 1
     assert seen["region"] == {"left": 15, "top": 25, "width": 320, "height": 240}
-    assert seen["backend"] == "mss"  # 缺省后端不变（issue #31 B2）
+    assert seen["backend"] == "auto"  # Windows 优先 DXGI，不可用时回退 mss
 
     seen.clear()
     main(["receive", "--source", "desktop", "--region", "15,25,320,240",

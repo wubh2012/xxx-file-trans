@@ -44,7 +44,7 @@ from receiver.pipeline import (
     decode_frame,
     measure_geometry,
 )
-from receiver.protocol import FRAME_NO_METADATA
+from receiver.protocol import FLAGS_FEC, FRAME_NO_METADATA
 
 
 @dataclass
@@ -325,7 +325,8 @@ def run_calibration(frames, clock=time.monotonic) -> dict:
                                               pad=outcome.header.pad, residual=0))
                 # 数据帧归组（元数据帧哨兵不参与，issue #29）；total_frames
                 # 由帧头 CRC 保证帧间一致，逐帧覆盖即锚定
-                if outcome.header.frame_no != FRAME_NO_METADATA:
+                if (outcome.header.frame_no != FRAME_NO_METADATA
+                        and not (outcome.header.flags & FLAGS_FEC)):
                     g = groups.setdefault(outcome.header.file_id,
                                           TransferGroup(outcome.header.file_id))
                     g.total_frames = outcome.header.total_frames

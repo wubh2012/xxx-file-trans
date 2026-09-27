@@ -46,7 +46,7 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
 单变量扫 FPS，检验 speedup-methods.md B1 的前提「desktop 抓屏实际可跑 50–60」。
 
 ```powershell
-# 全量：FPS {10,15,20,30} × 5MiB × BIT=8 × 3 次接收 + 每档 1 轮 calibrate（约 35 分钟）
+# 全量：FPS {10,15,20,30} × 5MiB × CSS BIT=6/PAD=3 × 3 次接收 + 每档 1 轮 calibrate
 .venv/Scripts/python.exe benchmark/run_bench_live.py
 
 # 冒烟（3–5 分钟，验链路）
@@ -55,6 +55,30 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
 # B2 复测口径：dxgi 采集 + 自定义档位（结果写 *_dxgi.json/.csv）
 .venv/Scripts/python.exe benchmark/run_bench_live.py --capture dxgi --fps-list 15,20,30,45,60
 ```
+
+`--bit-css` 和 `--pad` 可显式覆盖参数；默认 CSS BIT=6、PAD=3，125% 显示缩放
+下物理 BIT 约为 8，适合作为 desktop 吞吐基线。
+
+### 真实文件屏幕端到端（推荐用于优化前后对比）
+
+指定 `--input` 后，基准不再生成随机文件，而是把同一个真实文件交给
+`sender.html`，打开**有头浏览器**循环播放；接收端在另一线程使用
+`desktop` 取帧源（`dxgi` 或 `mss`）读取真实屏幕。每个档位同时记录校准缺帧、
+实测到达 FPS、墙钟耗时、拒帧数，并要求还原结果 SHA-256 与源文件一致。
+同一文件多轮复测会隔离 progress 目录，不会把上一轮断点续传混入下一轮。
+
+```powershell
+# 图片目录中的真实文件，扫 15/20/30 FPS，每档 1 次，优先 DXGI
+.venv/Scripts/python.exe benchmark/run_bench_live.py `
+  --capture dxgi `
+  --input "C:\Users\GMKMIX\Pictures\Screenshots\屏幕截图 2026-08-17 193931.png" `
+  --fps-list 15,20,30 --reps 1 --calib-cycles 1
+```
+
+结果写入 `live_desktop_results_dxgi_output.json/.csv`，其中 `sha_ok=true` 是
+端到端通过的硬条件；`wall_s` 才是用户实际等待时间，`measuredFps` 和
+`missingRate` 用于判断丢帧/重播造成的额外成本。运行时浏览器窗口必须保持
+在前台且不可被遮挡，显示器不能自动熄屏。
 
 > FPS 档位说明：原计划扫 {30,45,60} 检验 B1 上限，冒烟实测 30/60 时实收节拍仅
 > 5.75/0.2 fps——稳定闸门「两帧一致」判定在抓屏周期 > 显示周期时永不满足，

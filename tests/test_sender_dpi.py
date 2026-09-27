@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SENDER = ROOT / "sender.html"
 
 VIEW_W, VIEW_H = 800, 600
-PAD_DEFAULT = 4
+PAD_DEFAULT = 3
+BIT_DEFAULT_CSS = 6
 
 
 @pytest.fixture()
@@ -72,7 +73,7 @@ def test_canvas_designed_in_physical_pixels(browser, tmp_path, dpr):
 
         # 物理 BIT = round(CSS BIT × dpr)（不低于 COLS/ROWS 1 字节上限的抬升值）
         lifted = max(-(-w_phys // (255 + 2 * PAD_DEFAULT)), -(-h_phys // (255 + 2 * PAD_DEFAULT)))
-        assert geo["BIT"] == max(round(8 * dpr), lifted), geo
+        assert geo["BIT"] == max(round(BIT_DEFAULT_CSS * dpr), lifted), geo
         assert geo["BIT"] <= 15
         assert (geo["COLS"] + 2 * geo["PAD"]) * geo["BIT"] <= w_phys
         assert (geo["ROWS"] + 2 * geo["PAD"]) * geo["BIT"] <= h_phys

@@ -20,7 +20,7 @@ import pytest
 
 import fixture_encoder
 from receiver import paths
-from receiver.run import ReceiveResult, run_receive
+from receiver.run import PrefetchedFrames, ReceiveResult, run_receive
 
 
 def export_ok(src: bytes, frames_dir: Path, filename: str, file_id: int) -> int:
@@ -79,6 +79,39 @@ class RecordingNotifier:
 
     def __call__(self, title, message):
         self.calls.append((title, message))
+
+
+class ClosableFrames:
+    def __init__(self, items):
+        self.items = list(items)
+        self.closed = False
+
+    def __iter__(self):
+        for item in self.items:
+            yield item
+
+    def close(self):
+        self.closed = True
+
+
+def test_prefetched_frames_is_bounded_and_counts_drops():
+    """C3 预取队列有界，生产过快时明确记录丢弃而不阻塞。"""
+    source = ClosableFrames([(str(i), i) for i in range(20)])
+    prefetched = PrefetchedFrames(source, maxsize=1)
+    prefetched.start()
+    # 生产者已结束；队列只需可消费且统计可观测，具体保留哪一帧不构成协议语义。
+    items = list(prefetched)
+    prefetched.close()
+    assert items and items[-1][0].isdigit()
+    assert prefetched.stats.produced == 20
+    assert prefetched.stats.dropped > 0
+
+
+def test_prefetched_frames_close_releases_source():
+    source = ClosableFrames([])
+    prefetched = PrefetchedFrames(source)
+    prefetched.close()
+    assert source.closed
 
 
 # ---------- 成功路径：结构化结果字段 ----------
