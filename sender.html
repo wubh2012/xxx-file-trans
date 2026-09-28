@@ -113,6 +113,7 @@
      <button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button>
      <button id="copyCmdBtn" type="button">一键复制接收端命令</button></p>
   <p id="stopHint">全屏播放：按 Esc 或点击画面即停止并返回本页。</p>
+  <p id="roundHint" class="hint"></p>
 </div>
 <button id="stopBtn" type="button">停止播放（Esc）</button>
 <canvas id="stage" hidden></canvas>
@@ -398,6 +399,29 @@ function renderMetadataFrame() {
 
 /* ---------- 播放循环：无限循环重播；元数据帧与 FEC 校验帧均占一拍 ---------- */
 const FINAL_FRAME_HOLD_MS = 1000; // 每轮末帧留出一秒，给抓屏端稳定采样
+
+/* ---------- 播放进度可见性（issue #33）----------
+   单向信道没有「还原完成」回执，用户最关心「什么时候能停」。画面上不能叠
+   任何 UI（亮色像素污染角标检测），标签页标题不进抓屏区域，是零风险的显示
+   位置：播放期间标题实时显示轮次 / 当轮进度 / 累计时长，数据一律从播放
+   循环同源取（playPos / 回卷计数 / rAF 时间戳），不另起计时器。 */
+const TITLE_UPDATE_INTERVAL_MS = 1000;  // 标题按秒级节流，不每帧写 title
+// 停止时机指引：2 为发送端侧指引值（接收端 out-of-scope，未设硬判据）——
+// 口径参照接收端 calibrate 的轮次计数视角（第 2 轮起每帧皆重复，可确认传输稳定）
+const MIN_RECOMMENDED_ROUNDS = 2;
+const ROUND_GUIDANCE = '第 1 轮收齐数据，第 2 轮起重复帧用于确认传输稳定';   // 状态文案与播放前提示共用（issue #33）
+let titleBeforePlayback = null;   // 播放前标题，停止播放后还原
+let playbackStartTs = 0;          // 首个 rAF 时间戳，累计已播时长的起点
+let lastTitleTs = -1e9;           // 上次标题更新时刻（节流）
+let roundNo = 1;                  // 当前轮次（playPos 回卷即一轮播完）
+function updateTitleProgress(ts) {
+  if (ts - lastTitleTs < TITLE_UPDATE_INTERVAL_MS) return;
+  lastTitleTs = ts;
+  const elapsed = Math.floor((ts - playbackStartTs) / 1000);
+  const pct = Math.floor(playPos / playbackSequence.length * 100);
+  document.title = `第 ${roundNo} 轮 · ${pct}% · 已播 ${elapsed}s`;
+}
+
 let rafId = 0, lastTs = 0, playPos = 0, holdUntil = 0, playbackSequence = [];
 function buildPlaybackSequence() {
   const seq = [];
@@ -417,6 +441,8 @@ function buildPlaybackSequence() {
 }
 function loop(ts) {
   if (!state.playing) return;
+  if (!playbackStartTs) playbackStartTs = ts;   // 首帧起算累计已播时长
+  updateTitleProgress(ts);
   if (ts < holdUntil) {
     rafId = requestAnimationFrame(loop);
     return;
@@ -433,6 +459,7 @@ function loop(ts) {
       renderFecFrame(-item - 2);
     }
     playPos = (playPos + 1) % playbackSequence.length;
+    if (playPos === 0) roundNo++;   // 循环回卷即一轮播完（issue #33 标题轮次）
   }
   rafId = requestAnimationFrame(loop);
 }
@@ -467,6 +494,14 @@ async function startPlayback() {
   stage.hidden = false;
   document.body.classList.add('playing', state.playMode);   // 模式标注供样式与自动化
   state.playing = true;
+  // 标题栏进度（issue #33）：保存播放前标题，起始即写一次（loop 内秒级节流接管）
+  titleBeforePlayback = document.title;
+  roundNo = 1; playbackStartTs = 0; lastTitleTs = -1e9;
+  document.title = '第 1 轮 · 0% · 已播 0s';
+  // 停止时机指引（issue #33）：单向信道无「还原完成」回执，状态文案给出
+  // 可操作口径（见 MIN_RECOMMENDED_ROUNDS / ROUND_GUIDANCE）；前缀当前播放
+  // 模式，保持状态栏「标明当前模式」的既有契约
+  setStatus(`${PLAY_MODES[state.playMode].label}中：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）`);
   requestWakeLock();   // 防熄屏（issue #32）：挂播放生命周期，不支持时静默降级
   playbackSequence = buildPlaybackSequence();
   playPos = 0; holdUntil = 0; lastTs = -1e9;
@@ -478,6 +513,11 @@ function stopPlayback() {
   releaseWakeLock();
   hiddenWhilePlaying = false;
   cancelAnimationFrame(rafId);
+  // 标题栏进度还原（issue #33）：进度只挂播放生命周期，停止即回到播放前文本
+  if (titleBeforePlayback !== null) {
+    document.title = titleBeforePlayback;
+    titleBeforePlayback = null;
+  }
   stage.hidden = true;
   document.body.classList.remove('playing', 'fullscreen', 'window');
   el('playBtn').disabled = false;   // 文件已加载，可直接换模式重播
@@ -733,6 +773,8 @@ function setStatus(msg, isErr) {
 }
 function updateInfo() {
   const g = state.geo;
+  // 整文件预计时长（issue #33）：按指引轮数计算，口径与「每轮约 X 秒」一致
+  const perRoundSec = state.totalFrames / g.FPS;
   const rows = [
     ['fileId（内容 CRC32）', '0x' + state.fileId.toString(16).toUpperCase().padStart(8, '0')],
     ['文件名', escapeHtml(state.fileName)],
@@ -740,12 +782,17 @@ function updateInfo() {
     ['BIT / PAD / FPS', `${g.BIT} px（物理）/ ${g.PAD}×BIT / ${g.FPS}`],
     ['COLS × ROWS', `${g.COLS} × ${g.ROWS}`],
     ['chunkSize', `${g.chunkSize} 字节/帧`],
-    ['总帧数', `${state.totalFrames}（每轮约 ${(state.totalFrames / g.FPS).toFixed(1)} 秒）`],
+    ['总帧数', `${state.totalFrames}（每轮约 ${perRoundSec.toFixed(1)} 秒）`],
+    ['预计总时长', `${formatDuration(perRoundSec * MIN_RECOMMENDED_ROUNDS)}（播满 ${MIN_RECOMMENDED_ROUNDS} 轮）`],
     ['FEC 校验帧', `${fecFrameCount()}（每 32 个数据帧附加 2 个）`],
   ];
   const tb = el('info').tBodies[0];
   tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
   el('info').hidden = false;
+}
+function formatDuration(sec) {
+  // 分钟 / 秒自适应：≥1 分钟用分钟（一位小数），否则用秒（单帧文件约 0.3s 时兜底为 1 秒内）
+  return sec >= 60 ? `约 ${(sec / 60).toFixed(1)} 分钟` : `约 ${Math.max(1, Math.round(sec))} 秒`;
 }
 
 const drop = el('drop'), fileInput = el('file');
@@ -789,6 +836,12 @@ if (!selfTest()) {
 } else {
   setStatus('自检通过（CRC-32/ISO-HDLC），选择文件开始发送');
 }
+
+/* 停止时机提示（issue #33）：无需选文件即显示，首次使用者不看文档也知道
+   「播几轮才够」——与状态文案共用 ROUND_GUIDANCE，与信息表预计总时长
+   同一 MIN_RECOMMENDED_ROUNDS 单一事实源 */
+el('roundHint').textContent =
+  `停止时机：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）。`;
 
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
 window.__sender = {
