@@ -10,3 +10,4 @@ frames.json
 .pytest_cache/
 .tmp/
 benchmark/results/work/
+.playwright-mcp/
