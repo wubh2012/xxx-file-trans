@@ -106,7 +106,7 @@ def test_cli_video_dispatch_passes_video_path(monkeypatch):
 
     seen = {}
 
-    def fake_iter_video(video):
+    def fake_iter_video(video, *, tape=False):
         seen["video"] = video
         yield "video-000001", np.zeros((10, 10), np.uint8)  # 首帧正常进入循环
         raise KeyboardInterrupt  # 模拟接收中 Ctrl+C（真实生成器异常在迭代中发生）
@@ -198,3 +198,40 @@ def test_cli_video_unopenable_file_exits_2(tmp_path):
     """CLI：视频打不开 → 明确报错，退出码 2，而非以「未收齐」退出码 1 收场。"""
     rc = main(["receive", "--source", "video", "--video", str(tmp_path / "no.avi")])
     assert rc == 2
+
+
+# ---------- 带模式（issue #45）：旁路稳定闸门逐帧直读 ----------
+
+def test_iter_video_tape_mode_emits_every_decoded_frame(tmp_path):
+    """带模式：制带 MP4（ADR-0003）每个传输帧恰出现一次，相邻帧内容全部
+    不同，「稳定两帧」判定永不满足——带模式旁路闸门逐帧直读，帧不滞留、
+    不靠超时兜底。对照：默认闸门路径对同一视频放不出全部帧。"""
+    src = b"tape mode"
+    paths = _export_frames(tmp_path, src, "tp.bin")
+    imgs = [_read_gray(p) for p in paths]
+    video = tmp_path / "tape.avi"
+    _write_video(video, imgs, fps=30.0)  # 每传输帧只出现 1 次（无重复捕获）
+
+    names = [name for name, _ in iter_video(video, tape=True)]
+    assert names == [f"video-{i:06d}" for i in range(1, len(paths) + 1)]
+
+    default_names = [name for name, _ in iter_video(video)]
+    assert len(default_names) < len(paths), "默认闸门路径应卡住全部新画面（对照）"
+
+
+def test_cli_video_tape_flag_passed_through(monkeypatch):
+    """CLI 分派：--tape 透传 iter_video 的 tape 参数（缺省 False 不变）。"""
+    import receiver.cli as cli
+
+    seen = {}
+
+    def fake_iter_video(video, *, tape=False):
+        seen["tape"] = tape
+        yield "video-000001", np.zeros((10, 10), np.uint8)
+        raise KeyboardInterrupt  # 首帧进入循环后即停，收尾语义不在本用例
+
+    monkeypatch.setattr(cli, "iter_video", fake_iter_video)
+    assert main(["receive", "--source", "video", "--video", "rec.avi"]) == 1
+    assert seen["tape"] is False
+    assert main(["receive", "--source", "video", "--video", "rec.avi", "--tape"]) == 1
+    assert seen["tape"] is True

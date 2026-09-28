@@ -87,6 +87,9 @@ def _add_source_args(p) -> None:
     p.add_argument("--source", required=True, choices=["images", "desktop", "video", "camera"], help="取帧源")
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
+    p.add_argument("--tape", action="store_true",
+                   help="video 源带模式（issue #45）：制带 MP4（tapemaker 出片）每传输帧"
+                        "恰出现一次，旁路稳定闸门逐帧直读")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
     p.add_argument("--capture", choices=["auto", "mss", "dxgi"], default="auto",
                    help="desktop 源采集后端：auto 在 Windows 优先 DXGI、不可用时回退 mss；"
@@ -125,7 +128,7 @@ def _frames_or_error(parser, args):
     # video（#10）：缺参用法错误；打不开的报错见调用方
     if not args.video:
         parser.error("--source video 需要 --video <录制视频文件>")
-    return iter_video(args.video)
+    return iter_video(args.video, tape=args.tape)
 
 
 def _anchor_dirs(args) -> None:

@@ -230,6 +230,23 @@ def test_make_roundtrip_larger_file_fec_and_rounds(tmp_path):
     assert result.received == result.total  # 收齐判据：数据帧齐
 
 
+@needs_ffmpeg
+def test_make_roundtrip_via_receiver_video_source(tmp_path):
+    """§11.4.1 完整链路（issue #39）：tapemaker 制带 → receiver video 源
+    （带模式旁路稳定闸门，issue #45）→ run_receive 还原，sha256 一致。"""
+    from receiver.sources.video import iter_video
+
+    src = tmp_path / "链路验证.bin"
+    src_bytes = _payload(30_000, seed=5)
+    src.write_bytes(src_bytes)
+    out_mp4 = tmp_path / "tape.mp4"
+    assert main(["make", str(src), "-o", str(out_mp4)]) == 0
+
+    result = run_receive(iter_video(out_mp4, tape=True), tmp_path / "out")
+    assert result.code == 0, f"还原失败：{result.error or result.incomplete}"
+    assert result.sha256 == hashlib.sha256(src_bytes).hexdigest()
+
+
 def test_make_missing_source_exits(tmp_path):
     with pytest.raises(SystemExit, match="源文件不存在"):
         main(["make", str(tmp_path / "nope.bin"), "-o", str(tmp_path / "t.mp4")])

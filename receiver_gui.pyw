@@ -88,6 +88,7 @@ class ReceiverGui:
         self.region_var = tk.StringVar()
         self.dir_var = tk.StringVar()
         self.video_var = tk.StringVar()
+        self.tape_var = tk.BooleanVar(value=False)   # video 源带模式（issue #45）
 
         desktop = ttk.Frame(setup)
         ttk.Label(desktop, text="采集区域：").grid(row=0, column=0, sticky="w")
@@ -115,6 +116,8 @@ class ReceiverGui:
         ttk.Entry(video, textvariable=self.video_var, width=44).grid(row=0, column=1, padx=4)
         ttk.Button(video, text="浏览…",
                    command=self._browse_video).grid(row=0, column=2)
+        ttk.Checkbutton(video, text="带模式（tapemaker 制带）", variable=self.tape_var,
+                        command=self._update_command).grid(row=0, column=3, padx=(8, 0))
         self.video_var.trace_add("write", lambda *_: self._update_command())
         video.columnconfigure(1, weight=1)
         self._param_frames["video"] = video
@@ -184,7 +187,8 @@ class ReceiverGui:
             "desktop": "先在发送端开始播放（窗口播放模式），再点「开始接收」；"
                        "框选只需完整包含帧画布并留边，无需像素级精确。",
             "images": "选择发送端导出的 PNG 帧序列目录（frames_png 布局）。",
-            "video": "选择发送端画面的预录屏幕视频文件。",
+            "video": "选择发送端画面的预录屏幕视频文件；tapemaker 制带的 MP4（"
+                     "每个传输帧只出现一次）勾选「带模式」。",
         }[source])
         self._update_command()
 
@@ -204,7 +208,8 @@ class ReceiverGui:
             return
         self.command_var.set(build_command(
             source, frames_dir=self.dir_var.get() or None,
-            video=self.video_var.get() or None, region=region))
+            video=self.video_var.get() or None, region=region,
+            tape=self.tape_var.get()))
 
     def _region_or_none(self) -> dict | None:
         """区域输入 → mss region dict；留空 = 整屏；格式非法抛 ValueError。"""
@@ -281,7 +286,8 @@ class ReceiverGui:
             messagebox.showerror("参数有误", str(e), parent=self.root)
             return
 
-        source_params = {"frames_dir": dir_text, "video": video_text, "region": region}
+        source_params = {"frames_dir": dir_text, "video": video_text, "region": region,
+                         "tape": self.tape_var.get()}
         self.model = ProgressModel()
         self.events = queue.Queue()
         self.job = ReceiveJob(lambda: make_frames(source, **source_params),

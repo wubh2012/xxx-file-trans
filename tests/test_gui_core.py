@@ -337,3 +337,27 @@ class TestTkinterShellSmoke:
         monkeypatch.setattr(shell, "_start", lambda: calls.append("start"))
         shell._restart()
         assert calls == []
+
+
+# ---------- video 源带模式（issue #45） ----------
+
+class TestVideoTapeMode:
+    def test_build_command_tape_appends_flag(self):
+        cmd = build_command("video", video="t.mp4", tape=True)
+        assert cmd.endswith(" --tape")
+        assert " --tape" not in build_command("video", video="t.mp4")
+
+    def test_make_frames_passes_tape_to_iter_video(self, monkeypatch):
+        import receiver.gui_core as gc
+
+        seen = {}
+
+        def fake_iter_video(video, *, tape=False):
+            seen["tape"] = tape
+            yield "video-000001", None
+
+        monkeypatch.setattr(gc, "iter_video", fake_iter_video)
+        list(gc.make_frames("video", video="t.mp4"))
+        assert seen["tape"] is False
+        list(gc.make_frames("video", video="t.mp4", tape=True))
+        assert seen["tape"] is True

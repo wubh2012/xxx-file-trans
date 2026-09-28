@@ -38,7 +38,8 @@ SOURCE_LABELS = {
 }
 
 
-def build_command(source: str, *, frames_dir=None, video=None, region=None) -> str:
+def build_command(source: str, *, frames_dir=None, video=None, region=None,
+                  tape=False) -> str:
     """GUI 当前参数 → 等效完整命令文本（发送端命令助手，issue #26）。
 
     与 CLI 实际使用的参数一致（含具体坐标）：desktop region 为 None
@@ -54,7 +55,10 @@ def build_command(source: str, *, frames_dir=None, video=None, region=None) -> s
     if source == "images":
         return f'{COMMAND_PREFIX} --source images --dir "{frames_dir}"'
     if source == "video":
-        return f'{COMMAND_PREFIX} --source video --video "{video}"'
+        cmd = f'{COMMAND_PREFIX} --source video --video "{video}"'
+        if tape:
+            cmd += " --tape"   # 带模式（issue #45）：制带 MP4 旁路稳定闸门
+        return cmd
     raise ValueError(f"未知源 {source}")
 
 
@@ -87,7 +91,8 @@ def validate_config(source: str, *, frames_dir=None, video=None,
     return f"未知源 {source}"
 
 
-def make_frames(source: str, *, frames_dir=None, video=None, region=None):
+def make_frames(source: str, *, frames_dir=None, video=None, region=None,
+                tape=False):
     """GUI 参数 → 取帧源迭代器（与 CLI 同分派，issue #26）。
 
     desktop / video 生成器惰性打开：真实抓屏 / 解码在接收线程首次迭代
@@ -98,7 +103,7 @@ def make_frames(source: str, *, frames_dir=None, video=None, region=None):
     if source == "desktop":
         return iter_desktop(region=region)
     if source == "video":
-        return iter_video(video)
+        return iter_video(video, tape=tape)
     raise ValueError(f"未知源 {source}")
 
 
