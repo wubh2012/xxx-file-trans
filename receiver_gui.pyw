@@ -95,7 +95,8 @@ class ReceiverGui:
         entry.grid(row=0, column=1, padx=4)
         self.region_var.trace_add("write", lambda *_: self._update_command())
         ttk.Button(desktop, text="框选…", command=self._pick_region).grid(row=0, column=2)
-        ttk.Label(desktop, text="留空 = 整屏；L,T,W,H 为物理像素").grid(
+        ttk.Label(desktop, text="留空 = 整屏（仅限干净桌面，无白色元素/弹窗遮挡；"
+                               "窗口播放建议「框选…」圈住画面）。L,T,W,H 为物理像素").grid(
             row=1, column=1, columnspan=2, sticky="w", pady=(2, 0))
         desktop.columnconfigure(1, weight=1)
         self._param_frames["desktop"] = desktop

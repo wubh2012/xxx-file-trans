@@ -666,7 +666,7 @@ const PLAY_MODES = {
     desktopCmd: 'python -m receiver receive --source desktop --out output',
     sop: [
       ['① 载入文件（点击选择或拖入），点「开始播放」进入全屏循环播放',
-       '① 先就位：运行接收端 GUI（receiver_gui.pyw，选「抓屏（desktop）」源、采集区域留空＝整屏），或命令行 desktop 源（camera 拍摄为设计目标，camera 源完整采集尚未实现；接收端也可在播放开始后就位）'],
+       '① 先就位：运行接收端 GUI（receiver_gui.pyw，选「抓屏（desktop）」源、采集区域留空＝整屏——整屏仅限干净桌面：任务栏自动隐藏、无弹窗遮挡，桌面有白色元素时改用「框选…」圈住画面），或命令行 desktop 源（camera 拍摄为设计目标，camera 源完整采集尚未实现；接收端也可在播放开始后就位）'],
       [`② ${SOP_REMINDER_SENDER('画面')}`,
        `② 对准屏幕采集，${SOP_RESTORE_RECEIVER}`],
       [`③ ${SOP_STOP_SENDER('按 Esc 停止')}`,

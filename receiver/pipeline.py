@@ -15,6 +15,7 @@ PAD 不再由画布边沿推导（issue #22）：角标只锚定数据网格，�
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -34,9 +35,10 @@ from receiver.protocol import (
     verify_crc,
 )
 
-# 角标四条几何一致性约束的容差：PNG 源画面精确，透视/采集源由后续
-# 票据（desktop #9 / camera #13）在此处扩展校正逻辑。
-_SIDE_EQUAL_TOL = 1  # 四角标边长允许的测量偏差（像素）
+# 角标几何一致性约束的容差：PNG / desktop 源像素精确，camera 透视校正
+# 将来另立 ADR（issue #37 设计）在此处扩展。
+_SIDE_EQUAL_TOL = 1  # 同边候选对齐允许的测量偏差（像素）
+_MAX_GRID_DIM = 255  # COLS / ROWS 帧头各 1 字节（§2），剪枝上限
 
 
 @dataclass
@@ -112,50 +114,105 @@ def _solid_square_candidates(bw: np.ndarray) -> list[tuple[int, int, int, int]]:
     return out
 
 
-def _corner_distance(box: tuple[int, int, int, int], corner: str, img_w: int, img_h: int) -> int:
-    """外接框到画面角的切比雪夫距离（角标必然比任何网格白块更靠近画面角）。"""
-    left, top, w, h = box
-    right, bottom = left + w, top + h
-    dist = {
-        "tl": lambda: max(left, top),
-        "tr": lambda: max(img_w - right, top),
-        "bl": lambda: max(left, img_h - bottom),
-        "br": lambda: max(img_w - right, img_h - bottom),
-    }
-    return dist[corner]()
+class _Quad(NamedTuple):
+    """候选四元组裁决结果（area 用于「外沿者即真解」比较，issue #37）。"""
+
+    area: int
+    side: int
+    rect: tuple[int, int, int, int]  # 网格矩形 x0/y0/x1/y1
+
+
+def _grid_dim_ok(dim: int, bit: int) -> bool:
+    """网格维度剪枝：正、BIT 整数倍、COLS/ROWS ≤ 帧头 1 字节上限（§2）。"""
+    return dim > 0 and dim % bit == 0 and dim // bit <= _MAX_GRID_DIM
+
+
+def _aligned_row_pairs(cands: list[tuple[int, int, int, int]], side: int
+                       ) -> dict[tuple[int, int], set[int]]:
+    """同 side 候选的左右配对（上边 TL–TR 与下边 BL–BR 共用）：两块 top
+    相差 ≤ _SIDE_EQUAL_TOL，右块在左块右侧且留出正网格宽（right >
+    left + side，严格不等式天然去重：每对只由左侧块枚举一次）。
+
+    返回 {(left, right): 左块 top 集合}——同 left 可竖向堆叠多个候选，
+    各自与右侧配对后共用一个键。按 top 分桶 + 邻域扫描，均摊近似 O(n)
+    （issue #37：整屏帧候选可达数千，不可全组合）。
+    """
+    by_top: dict[int, list[int]] = {}
+    for left, top, _, _ in cands:
+        by_top.setdefault(top, []).append(left)
+    pairs: dict[tuple[int, int], set[int]] = {}
+    for top, lefts in by_top.items():
+        for left in lefts:
+            for t2 in range(top - _SIDE_EQUAL_TOL, top + _SIDE_EQUAL_TOL + 1):
+                for right in by_top.get(t2, ()):
+                    if right > left + side:
+                        pairs.setdefault((left, right), set()).add(top)
+    return pairs
+
+
+def _outermost_quadruple(cands: list[tuple[int, int, int, int]]) -> _Quad | None:
+    """满足矩形约束的角标四元组搜索，取覆盖范围最大者（外沿者即真解）。
+
+    真角标内角四点构成轴对齐严格矩形（ADR-0001）：上下边各自同 top
+    （±容差）、左右各自同 left（±容差）、四边同 side；数据网格由内角
+    给出（内角 = 网格外角），再施加栅格整除性 / COLS·ROWS 1 字节上限
+    剪枝。画布内的假矩形（数据白块四人成组）必然严格落在真矩形内部，
+    外沿者即真解（issue #37）；画布外围干扰四元组若被误选，由帧头交叉
+    校验 + CRC 兜底整帧拒绝，不产生静默错数据。
+
+    返回 (side, 网格矩形 x0/y0/x1/y1)，无满足约束的四元组返回 None。
+    """
+    by_side: dict[int, list[tuple[int, int, int, int]]] = {}
+    for box in cands:
+        by_side.setdefault(box[2], []).append(box)
+    best: _Quad | None = None
+    tols = range(-_SIDE_EQUAL_TOL, _SIDE_EQUAL_TOL + 1)
+    for side, boxes in by_side.items():
+        bit = side // 3
+        if bit <= 0:
+            continue
+        row_pairs = _aligned_row_pairs(boxes, side)
+        for (left, right), top_tops in row_pairs.items():
+            gw = right - left - side
+            if not _grid_dim_ok(gw, bit):
+                continue
+            # 下边对与上边对按 left/right 对齐（±容差）配对成四元组
+            for dtl in tols:
+                for dtr in tols:
+                    for bot_top in row_pairs.get((left + dtl, right + dtr), ()):
+                        for top_top in top_tops:
+                            gh = bot_top - top_top - side
+                            if not _grid_dim_ok(gh, bit):
+                                continue
+                            if best is None or gw * gh > best.area:
+                                best = _Quad(gw * gh, side, (left + side, top_top + side, right, bot_top))
+    return best
 
 
 def measure_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
     """几何自举测量（ADR-0001）：检测角标 → BIT → 数据网格矩形 → COLS/ROWS/PAD。
 
-    只测量、不做栅格整除性 / PAD 一致性等冻结校验（后者在 bootstrap_geometry）；
-    calibrate 探针（#11）需要未校验的原始测量值统计 ±1px 级残差。
-    测量本身不可能（无角标候选等）仍抛 FrameRejected('geometry')。
+    角标选取为全局四元组矩形约束搜索（issue #37，取代逐角就近——
+    「角标必然比任何网格白块更靠近画面角」在整屏采集下不成立）。选取
+    阶段已施加栅格整除性剪枝，精确源（PNG / desktop）返回值恒满足
+    bootstrap_geometry 的测量层校验；降质源（camera）±1px 偏差整帧拒绝
+    的行为不变。calibrate 探针（#11）的边长残差统计口径随之由四角均值
+    改为四元组单一边长（精确源下数值等价）。测量不可能（无候选 / 无
+    有效四元组）抛 FrameRejected('geometry')。
     """
-    img_h, img_w = bw.shape
     cands = _solid_square_candidates(bw)
+    if not cands:
+        raise FrameRejected("geometry", "未检测到角标候选")
+    found = _outermost_quadruple(cands)
+    if found is None:
+        raise FrameRejected(
+            "geometry",
+            "未检测到满足矩形约束的角标四元组（角标被遮挡或受干扰；"
+            "整屏采集时桌面白色元素易抢占角标，建议 --region 框选画布）")
 
-    # 四角各取距画面角最近的候选，再施加四条几何一致性约束
-    boxes: dict[str, tuple[int, int, int, int]] = {}
-    for corner in ("tl", "tr", "bl", "br"):
-        if not cands:
-            raise FrameRejected("geometry", "未检测到角标候选")
-        boxes[corner] = min(cands, key=lambda b: _corner_distance(b, corner, img_w, img_h))
-
-    sides = [boxes[c][2] for c in ("tl", "tr", "bl", "br")]
-    if max(sides) - min(sides) > _SIDE_EQUAL_TOL:
-        raise FrameRejected("geometry", f"四角标边长不一致: {sides}")
-    side = sum(sides) // 4
+    side, (x0, y0, x1, y1) = found.side, found.rect
     bit = side // 3
-
-    # 角标内角 = 数据网格四角外角 → 网格矩形
-    x0 = boxes["tl"][0] + side
-    y0 = boxes["tl"][1] + side
-    x1 = boxes["tr"][0]
-    y1 = boxes["bl"][1]
     gw, gh = x1 - x0, y1 - y0
-    if gw <= 0 or gh <= 0:
-        raise FrameRejected("geometry", f"数据网格尺寸简并: {gw}×{gh}")
     cols, rows = gw // bit, gh // bit
 
     # PAD 原始测量：网格原点 ÷ BIT（「画面即画布」时等于真实 PAD，裁切
@@ -177,6 +234,8 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
     gw, gh = x1 - x0, y1 - y0
     bit = geo.bit
     if geo.side % 3 != 0:
+        # 防御性护栏：四元组选取（#37）已保证 side 为候选实测值、候选过滤
+        # 已保证 3 整除，此处当前不可达；保留作测量实现的回归护栏
         raise FrameRejected("geometry", f"角标边长 {geo.side} 不能被 3 整除")
     if gw % bit != 0 or gh % bit != 0:
         raise FrameRejected("geometry", f"网格尺寸 {gw}×{gh} 不是 BIT={bit} 的整数倍")
