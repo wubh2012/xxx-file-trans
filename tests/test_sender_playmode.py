@@ -122,6 +122,60 @@ def test_fullscreen_mode_unchanged_click_stops(browser, tmp_path):
         ctx.close()
 
 
+# ---------- 全屏请求被拒：显式降级窗口播放（issue #44）----------
+
+def test_fullscreen_denied_downgrades_to_window_with_warning(browser, tmp_path):
+    """requestFullscreen 被拒（非用户手势路径，stub 模拟浏览器拒绝）时：
+    不得静默吞掉落在窗口渲染却按全屏引导——应整体降级为窗口播放
+    （body 标注、停止按钮、点击不停止、Esc 停止均随窗口口径），状态栏
+    显式告警。"""
+    src = tmp_path / "tiny.bin"
+    src.write_bytes(b"0" * 10000)
+    ctx = browser.new_context(viewport={"width": VIEW_W, "height": VIEW_H})
+    page = ctx.new_page()
+    page.goto(SENDER.as_uri())
+    page.evaluate("""() => {
+      // 模拟非 user gesture 下浏览器拒绝全屏请求（NotAllowedError）
+      document.documentElement.requestFullscreen =
+        () => Promise.reject(new DOMException('fullscreen denied', 'NotAllowedError'));
+    }""")
+    page.set_input_files("#file", str(src))
+    page.wait_for_selector("body.playing", timeout=15000)
+    try:
+        assert "window" in page.get_attribute("body", "class"), "全屏被拒应降级标注窗口模式"
+        assert page.is_visible("#stopBtn"), "降级窗口播放应显示停止按钮"
+
+        page.click("#stage")
+        page.wait_for_timeout(300)
+        assert page.query_selector("body.playing") is not None, "降级窗口播放点击画面不得停止"
+
+        status = page.text_content("#status")
+        assert "拒绝" in status and "降级" in status, "状态栏应显式告警全屏未生效"
+
+        page.keyboard.press("Escape")
+        page.wait_for_selector("body.playing", state="detached", timeout=5000)
+        assert page.get_attribute("#modeWindow", "aria-pressed") == "true", \
+            "降级后模式选择应已切至窗口（SOP / 接收端命令随联动）"
+    finally:
+        ctx.close()
+
+
+def test_fullscreen_forced_exit_midplay_warns(browser, tmp_path):
+    """播放中全屏被系统强行退出（fullscreenchange 失守）时，状态栏应显式
+    提示而非静默回退窗口渲染（issue #44 一致性校验）。"""
+    page, ctx = make_playing_page(browser, tmp_path)  # 无头环境全屏可成功进入
+    try:
+        assert page.evaluate("() => !!document.fullscreenElement"), "前置：全屏应已生效"
+        page.evaluate("() => document.exitFullscreen()")
+        page.wait_for_function(
+            "() => !document.fullscreenElement && document.getElementById('status').textContent.includes('全屏')",
+            timeout=5000,
+        )
+        assert page.query_selector("body.playing") is not None, "失守提示不中断播放（停止由用户决定）"
+    finally:
+        ctx.close()
+
+
 # ---------- 模式可先选后播（story 1）----------
 
 def test_mode_selectable_before_playing_and_replay(browser, tmp_path):

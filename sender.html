@@ -529,10 +529,20 @@ function loop(ts) {
 async function startPlayback() {
   state.mode = 'desktop';
   // 播放模式一等化（issue #21）：显式所选模式播放，不再「全屏优先、失败降级」。
-  // 窗口播放不请求全屏；全屏播放先争取全屏再反推几何（被拒时按当前窗口，
-  // 画布完整可见、四角角标不被裁掉——几何自举依赖角标）
+  // 窗口播放不请求全屏；全屏播放先争取全屏再反推几何。
+  let fullscreenDenied = false;
   if (state.playMode !== 'window') {
-    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+    try { await document.documentElement.requestFullscreen(); } catch (e) { /* 被拒：见下方显式校验 */ }
+    // 全屏请求显式校验（issue #44）：非用户手势（自动化合成点击、脚本调用、
+    // 载入文件自动开播）触发时浏览器会拒绝全屏请求，静默吞掉会落在普通窗口
+    // 里播放，而 body 标注、SOP、停止引导、接收端命令均仍按全屏口径输出
+    // （#37 复测中两播放窗口互扰、排查耗时即踩中此坑）。改为显式降级：
+    // 整体切换为窗口播放——模式状态、几何口径（视口减垫边）、点击不停止、
+    // --region pick 命令随之联动，UI 引导与实际渲染一致，状态栏告警。
+    if (!document.fullscreenElement) {
+      fullscreenDenied = true;
+      setPlayMode('window');
+    }
   }
   try {
     state.geo = deriveGeometry();
@@ -565,7 +575,9 @@ async function startPlayback() {
   // 停止时机指引（issue #33）：单向信道无「还原完成」回执，状态文案给出
   // 可操作口径（见 MIN_RECOMMENDED_ROUNDS / ROUND_GUIDANCE）；前缀当前播放
   // 模式，保持状态栏「标明当前模式」的既有契约
-  setStatus(`${PLAY_MODES[state.playMode].label}中：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）`);
+  setStatus((fullscreenDenied ? '全屏请求被拒绝（非用户手势触发），已降级为窗口播放；' : '')
+    + `${PLAY_MODES[state.playMode].label}中：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）`,
+    fullscreenDenied);
   requestWakeLock();   // 防熄屏（issue #32）：挂播放生命周期，不支持时静默降级
   playbackSequence = buildPlaybackSequence();
   playPos = 0; holdUntil = 0; lastTs = -1e9;
@@ -629,6 +641,15 @@ document.addEventListener('visibilitychange', () => {
     // 无条件补取：覆盖 hidden 态启动播放（request 被拒）的边界，
     // 正常播放中锁未失守时此调用为空操作
     requestWakeLock();
+  }
+});
+
+/* 全屏一致性校验（issue #44）：播放中全屏被系统强行退出（其他窗口抢占、
+   系统弹层遮挡等）时，实际渲染退回窗口而 UI 仍按全屏口径。显式提示不静默；
+   Esc 停止路径先触发 keydown（playing 已置 false）再退全屏，不会误报。 */
+document.addEventListener('fullscreenchange', () => {
+  if (state.playing && state.playMode === 'fullscreen' && !document.fullscreenElement) {
+    setStatus('全屏已被系统退出，画面退回窗口渲染；建议停止播放后按「窗口播放」重新开始', true);
   }
 });
 
