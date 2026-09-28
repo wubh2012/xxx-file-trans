@@ -1,8 +1,9 @@
 """帧序列构建（制带的协议写入侧，issue #38）。
 
-sender.html 之外的第二份封帧实现：帧头 / CRC / FEC 语义全部落在
-`receiver.protocol` / `receiver.fec`（单一事实来源），本模块只负责
-组装——分片、元数据帧（§4）、FEC 校验帧（§5）与轮次重复（ADR-0003）。
+sender.html 之外的第二份封帧实现：CRC / FEC 语义全部落在
+`receiver.protocol` / `receiver.fec`（单一事实来源，防协议漂移），
+本模块只负责写侧组装——帧头字节填充、分片、元数据帧（§4）、
+FEC 校验帧（§5）与轮次重复（ADR-0003）。
 
 一轮序列布局与 sender.html 播放序列逐位对齐：
   - 元数据帧按「每轮首帧 + 每 100 数据帧」节奏插入（帧号 0xFFFFFF 哨兵）；
@@ -13,8 +14,6 @@ sender.html 之外的第二份封帧实现：帧头 / CRC / FEC 语义全部落�
 
 from __future__ import annotations
 
-import gzip
-import zlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,6 +27,7 @@ from receiver.protocol import (
     FRAME_NO_METADATA,
     HEADER_BITS,
     fec_parity_count,
+    frame_crc,
 )
 
 METADATA_FIXED_BYTES = 12  # 元数据帧数据区固定部分（§4：1+4+4+2+1）
@@ -112,12 +112,6 @@ def build_header(
     h[19] = (geo.bit << 4) | geo.pad
     h[20:22] = flags.to_bytes(2, "big")
     return h
-
-
-def frame_crc(header: bytes, data: bytes) -> int:
-    """CRC-32/ISO-HDLC：覆盖帧头偏移 2–21 + 数据区有效字节（§3 冻结）。"""
-    data_len = int.from_bytes(header[13:15], "big")
-    return zlib.crc32(header[2:22] + data[:data_len]) & 0xFFFFFFFF
 
 
 def metadata_payload(filename: str, plain_size: int, compressed_size: int) -> bytes:

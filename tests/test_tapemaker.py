@@ -288,6 +288,9 @@ def test_calibrate_matrix_reports_survival_and_recommends(tmp_path, capsys):
     assert payload["recommended"]["bit"] == 8
     assert payload["recommended"]["crfSurvived"] == 18
     assert payload["recommended"]["strategy"] in ("allintra", "gop")
+    # N/fps 回填 make（issue #40 spec：BIT 下限、N、fps、I 帧策略四项齐备）
+    assert payload["recommended"]["rounds"] == 2
+    assert payload["recommended"]["fps"] == 30
     assert (out_dir / "1080p_bit8_gop_crf18.mp4").is_file(), "各组合样带应落盘备查"
 
 

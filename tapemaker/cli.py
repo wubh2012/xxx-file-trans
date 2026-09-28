@@ -247,21 +247,29 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 
     # 推荐口径（回填 make 默认值）：在最严 CRF 档仍 100% 存活的组合里，
     # 选最小 BIT（单帧容量最大 → 带最短）；并列选样带更小的策略档。
+    # N / fps 为本次矩阵的运行参数——存活率在该 N 下测得，如实推荐；
+    # 降 N 或变 fps 是否仍 100% 存活需重跑定标（spec #40：回填 BIT 下限、N、fps、I 帧策略）。
     harshest = max(args.crf)
     survivors = [r for r in rows if r["crf"] == harshest and r["survival"] >= 1.0]
     recommended = None
     if survivors:
         best = min(survivors, key=lambda r: (r["bit"], r["sizeBytes"]))
         recommended = {"resolution": best["resolution"], "bit": best["bit"],
-                       "strategy": best["strategy"], "crfSurvived": harshest}
+                       "strategy": best["strategy"], "rounds": args.rounds,
+                       "fps": args.fps, "crfSurvived": harshest}
 
     print("\n===== 定标摘要 =====")
     if recommended:
         print(
             f"推荐默认：分辨率 {recommended['resolution']} · BIT 下限 {recommended['bit']}"
-            f" · I 帧策略 {recommended['strategy']}（最严 crf {harshest} 下 100% 存活）"
+            f" · I 帧策略 {recommended['strategy']} · N {recommended['rounds']}"
+            f" · fps {recommended['fps']}（最严 crf {harshest} 下 100% 存活）"
         )
-        print("回填 make：--bit 下限即为可用的最小 BIT；I 帧策略经 TapeWriter(gop=…) 生效")
+        print(
+            f"回填 make：--bit {recommended['bit']} --rounds {recommended['rounds']}"
+            f" --fps {recommended['fps']}（N/fps 为本次运行参数，降 N / 变 fps 需重跑；"
+            f"I 帧策略经 TapeWriter(gop=…) 生效）"
+        )
     else:
         print(f"最严 crf {harshest} 下无 100% 存活组合：放宽 CRF 档位或加大轮次重复后重跑")
     print(json.dumps({"recommended": recommended, "rows": rows}, ensure_ascii=False))
