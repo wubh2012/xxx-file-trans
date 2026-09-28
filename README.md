@@ -18,6 +18,7 @@
 
   ```powershell
   .venv/Scripts/python.exe -m tapemaker make <文件> -o out.mp4 [--fps N] [--bit N] [--pad N] [--rounds N] [--resolution 1080p|4k]
+  .venv/Scripts/python.exe -m tapemaker calibrate <样本文件> -o <目录>   # 模拟二压矩阵定标：CRC 存活率表 + 推荐参数
   ```
 
 ## 测试

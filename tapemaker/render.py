@@ -50,11 +50,15 @@ class TapeWriter:
     """rawvideo 管道直喂 ffmpeg（零中间帧文件）。
 
     ffmpeg 用系统安装版本，缺失时报错并提示安装方式（需求 §11.2）。
-    all-intra 编码依据 ADR-0003 决策 1；CRF 取低值——黑白方块内容熵极低，
-    体积代价可接受，制带侧宁多花码率保角标边缘锐利（平台二压才是主要损失源）。
+    编码默认全 I 帧（gop=1）依据 ADR-0003 决策 1；gop 可显式给定为
+    「每个重复单元一 I 帧」的折中档（ADR-0003 备选 3，calibrate 扫参用）。
+    CRF 默认取低值——黑白方块内容熵极低，体积代价可接受，制带侧宁多花
+    码率保角标边缘锐利（平台二压才是主要损失源）；calibrate 模拟二压时
+    以更高 CRF 重编码近似，不改动制带侧默认。
     """
 
-    def __init__(self, out_path, geo: Geometry, fps: int) -> None:
+    def __init__(self, out_path, geo: Geometry, fps: int, *,
+                 crf: int = 12, gop: int = 1) -> None:
         exe = shutil.which("ffmpeg")
         if not exe:
             raise RuntimeError(
@@ -68,8 +72,8 @@ class TapeWriter:
             "-i", "-",
             "-c:v", "libx264",
             "-preset", "medium",
-            "-crf", "12",
-            "-g", "1",  # all-intra：每个视频帧都是 I 帧（ADR-0003）
+            "-crf", str(crf),
+            "-g", str(gop),  # 1 = all-intra（ADR-0003）；重复周期 = 折中档
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             str(out_path),

@@ -12,6 +12,7 @@
 """
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -261,3 +262,56 @@ def test_make_without_ffmpeg_hints_install(monkeypatch, tmp_path):
     src.write_bytes(b"x")
     with pytest.raises(RuntimeError, match="ffmpeg"):
         main(["make", str(src), "-o", str(tmp_path / "t.mp4")])
+
+
+# ---------- calibrate：模拟二压矩阵（issue #40） ----------
+
+@needs_ffmpeg
+def test_calibrate_matrix_reports_survival_and_recommends(tmp_path, capsys):
+    """矩阵扫参输出各组合存活行 + 末行 JSON；推荐口径 = 最严 CRF 档 100%
+    存活中 BIT 最小（回填 make 的 BIT 下限）。"""
+    src = tmp_path / "s.bin"
+    src.write_bytes(_payload(60_000, seed=9))  # 多数据帧，覆盖多组 FEC
+    out_dir = tmp_path / "cal"
+    assert main(["calibrate", str(src), "-o", str(out_dir),
+                 "--crf", "18", "--bit", "8", "--resolution", "1080p",
+                 "--strategy", "allintra,gop"]) == 0
+
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert len(payload["rows"]) == 2  # 2 策略 × 1 CRF 档
+    for row in payload["rows"]:
+        assert row["total"] > 1, "样本应覆盖多数据帧"
+        assert 0.0 <= row["survival"] <= 1.0
+        assert row["sizeBytes"] > 0
+        assert row["crcRejected"] >= 0
+    assert payload["recommended"]["resolution"] == "1080p"
+    assert payload["recommended"]["bit"] == 8
+    assert payload["recommended"]["crfSurvived"] == 18
+    assert payload["recommended"]["strategy"] in ("allintra", "gop")
+    assert (out_dir / "1080p_bit8_gop_crf18.mp4").is_file(), "各组合样带应落盘备查"
+
+
+@needs_ffmpeg
+def test_calibrate_survives_harshest_crf_when_any_combo_perfect(tmp_path, capsys):
+    """最严档（CRF 值最大）无 100% 存活时不强行推荐，摘要明示重跑口径。"""
+    src = tmp_path / "s.bin"
+    src.write_bytes(_payload(20_000, seed=13))
+    out_dir = tmp_path / "cal"
+    assert main(["calibrate", str(src), "-o", str(out_dir),
+                 "--crf", "18,51", "--bit", "8", "--resolution", "1080p"]) == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert len(payload["rows"]) == 2
+    # crf 51（极狠）不保证存活；推荐仅在 harshest 档全活时给出
+    if all(r["survival"] < 1.0 for r in payload["rows"] if r["crf"] == 51):
+        assert payload["recommended"] is None
+
+
+def test_calibrate_rejects_unknown_tiers(tmp_path):
+    src = tmp_path / "s.bin"
+    src.write_bytes(b"x")
+    with pytest.raises(SystemExit, match="未知分辨率档"):
+        main(["calibrate", str(src), "-o", str(tmp_path / "c"), "--resolution", "720p"])
+    with pytest.raises(SystemExit, match="未知 I 帧策略"):
+        main(["calibrate", str(src), "-o", str(tmp_path / "c"), "--strategy", "pb帧"])
+    with pytest.raises(SystemExit, match="源文件不存在"):
+        main(["calibrate", str(tmp_path / "nope.bin"), "-o", str(tmp_path / "c")])
