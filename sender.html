@@ -29,7 +29,7 @@
     color: #ddd;
     font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif;
     display: flex; align-items: center; justify-content: center;
-    overflow: hidden;
+    overflow: auto;                /* SOP / 提醒块使页面变高，小视口下允许滚动（播放态恢复隐藏，见 body.playing） */
   }
   #ui { max-width: 640px; padding: 24px; }
   h1 { font-size: 18px; color: #fff; margin: 0 0 12px; }
@@ -41,6 +41,13 @@
     border: 2px dashed #555; border-radius: 8px; padding: 18px;
     text-align: center; color: #aaa; margin-bottom: 12px; cursor: pointer;
   }
+  /* 两端 SOP 表（issue #36）：两栏时序步骤，随播放模式联动（renderSop） */
+  #sopTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #sopTable th, #sopTable td {
+    border: 1px solid #333; padding: 4px 8px; text-align: left; vertical-align: top;
+  }
+  #sopTable th { color: #aaa; background: #111; font-weight: normal; white-space: nowrap; }
+  #reminders { margin: 0; padding-left: 18px; }
   #drop.over { border-color: #8cf; color: #8cf; }
   #info { margin: 0 0 12px; padding: 10px 12px; background: #111; border-radius: 6px; }
   #info td { padding: 1px 10px 1px 0; }
@@ -67,7 +74,7 @@
      画布重叠（亮色元素混入抓屏会污染角标检测），故按钮深色、画布距
      视口边缘 ≥ 48px。 */
   body.playing #ui { display: none; }
-  body.playing { justify-content: flex-start; align-items: flex-start; }
+  body.playing { justify-content: flex-start; align-items: flex-start; overflow: hidden; }
   body.playing.window { justify-content: center; align-items: center; padding: 48px; }
   #stopBtn {
     display: none; position: fixed; top: 8px; right: 8px; z-index: 10;
@@ -85,6 +92,14 @@
 <body>
 <div id="ui">
   <h1>文件摆渡发送端</h1>
+  <fieldset>
+    <legend>两端操作步骤（摆渡 SOP，随播放模式联动）</legend>
+    <table id="sopTable">
+      <thead><tr><th>发送端（本页）</th><th>接收端</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="sopNote" class="hint">另一条交付路径：无拍摄 / 抓屏条件时，点「导出 PNG 帧序列」→ 把帧序列拷贝到接收侧 → 接收端以 images 源离线还原（详见下方导出说明）。</p>
+  </fieldset>
   <fieldset>
     <legend>发送参数</legend>
     <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）。默认 6 在 125% 缩放下为物理 BIT=8，兼顾吞吐与稳定性">BIT <input id="bit" type="number" min="1" max="15" value="6"> px/块</label>
@@ -105,13 +120,23 @@
       <span class="hint">留空＝随视口自动；填宽高＝画面按该尺寸渲染（播放中调整浏览器窗口不影响几何参数）</span>
     </span>
   </fieldset>
+  <fieldset>
+    <legend>播放前关键提醒（全程有效）</legend>
+    <ul id="reminders">
+      <li>勿遮挡：帧画面区域不能被任何窗口或物体遮挡（遮挡会污染角标检测与帧画面，无法还原）</li>
+      <li>勿熄屏：系统息屏会让播放停摆（本页播放期间已申请 Wake Lock 防熄屏，个别环境可能不支持）</li>
+      <li>勿切标签页：后台标签页会被浏览器节流至约 1 帧/秒，传输静默停滞且单向信道下无从察觉</li>
+      <li id="reminderRounds"></li>
+    </ul>
+  </fieldset>
   <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 按所选模式循环播放）</div>
   <input id="file" type="file" hidden>
   <table id="info" hidden><tbody></tbody></table>
   <p id="status"></p>
   <p><button id="playBtn" type="button" disabled>开始播放</button>
-     <button id="exportBtn" type="button">导出 PNG 序列（闭环自测素材）</button>
+     <button id="exportBtn" type="button">导出 PNG 帧序列（供 images 源还原 / 闭环自测）</button>
      <button id="copyCmdBtn" type="button">一键复制接收端命令</button></p>
+  <p id="exportHint" class="hint">「导出 PNG 帧序列」的两种用途：① 无拍摄 / 抓屏条件时，把帧序列拷贝到接收侧，用接收端 images 源离线还原（真实交付路径）；② 闭环自测——离线验证发送端与接收端协议一致性。</p>
   <p id="stopHint">全屏播放：按 Esc 或点击画面即停止并返回本页。</p>
   <p id="roundHint" class="hint"></p>
 </div>
@@ -609,21 +634,55 @@ async function handleFile(file) {
 /* ---------- 导出 PNG 序列（F9 最小实现，issue #5）：frames_png/<seq6>.png + frames.json ----------
    闭环自测（CONTEXT.md）：导出目录直喂接收端 images 源，验证双端协议一致性。
    帧序列与播放节奏完全一致：每 100 个数据帧前插元数据帧，每组数据帧后插 FEC 校验帧。 */
+/* 两端 SOP 共享文案（issue #36）：勿遮挡提醒 / 等待还原 / 停止时机 / 摘要核对
+   四种句子两种播放模式共用，单一事实源；行内序号 ①②③④ 为模式内时序
+   （全屏 ①②③，窗口 ①②③④），仍随步骤手工标注 */
+const SOP_REMINDER_SENDER = (area) =>
+  `播放期间勿遮挡${area}、勿熄屏、勿切标签页（见下方关键提醒）`;
+const SOP_RESTORE_RECEIVER = '收齐数据帧 + 元数据帧后自动「还原」落盘';
+const SOP_STOP_SENDER = (stopWay) =>
+  `建议播满 ${MIN_RECOMMENDED_ROUNDS} 轮（${ROUND_GUIDANCE}）后${stopWay}`;
+const SOP_SUMMARY_RECEIVER = '查看还原摘要，核对文件名与大小';
+
 /* 播放模式注册表（issue #21）：显示名 / 配对取帧源 / 停止提示 / desktop
-   源命令的单一事实源。模式行为差异（几何可用尺寸、是否请求全屏、点击
-   是否停止）保留在各职责点的分支，不进此表。 */
+   源命令 / 两端 SOP 步骤（issue #36）的单一事实源。模式行为差异（几何
+   可用尺寸、是否请求全屏、点击是否停止）保留在各职责点的分支，不进此表。
+   SOP 步骤按行时序配对 [发送端, 接收端]；轮数指引引用 MIN_RECOMMENDED_ROUNDS /
+   ROUND_GUIDANCE（与状态文案、信息表同一事实源）。 */
 const PLAY_MODES = {
   fullscreen: {
     label: '全屏播放', source: 'camera 拍摄',
     stopHint: '全屏播放：按 Esc 或点击画面即停止并返回本页。',
     desktopCmd: 'python -m receiver receive --source desktop --out output',
+    sop: [
+      ['① 载入文件（点击选择或拖入），点「开始播放」进入全屏循环播放',
+       '① 先就位：运行接收端 GUI（receiver_gui.pyw，选「抓屏（desktop）」源、采集区域留空＝整屏），或命令行 desktop 源（camera 拍摄为设计目标，camera 源完整采集尚未实现；接收端也可在播放开始后就位）'],
+      [`② ${SOP_REMINDER_SENDER('画面')}`,
+       `② 对准屏幕采集，${SOP_RESTORE_RECEIVER}`],
+      [`③ ${SOP_STOP_SENDER('按 Esc 停止')}`,
+       `③ ${SOP_SUMMARY_RECEIVER}`],
+    ],
   },
   window: {
     label: '窗口播放', source: 'desktop 抓屏',
     stopHint: '窗口播放：按 Esc 或「停止播放」按钮停止；点击画面不会停止。',
     desktopCmd: 'python -m receiver receive --source desktop --region pick --out output',
+    sop: [
+      ['① 先播放：选「窗口播放」→ 载入文件 → 点「开始播放」（先播放，再框选！窗口画面须先出现在屏幕上，接收端冻屏才能框到）',
+       '② 后框选：运行接收端 GUI（receiver_gui.pyw）选「抓屏（desktop）」→「框选…」框住帧画面 → 点「开始接收」；或命令行 desktop 源 --region pick 冻屏框选'],
+      [`③ ${SOP_REMINDER_SENDER('窗口画面')}`,
+       `③ 等待收帧，${SOP_RESTORE_RECEIVER}`],
+      [`④ ${SOP_STOP_SENDER('按 Esc 或「停止播放」按钮停止')}`,
+       `④ ${SOP_SUMMARY_RECEIVER}`],
+    ],
   },
 };
+
+/* 两端 SOP 表渲染（issue #36）：随播放模式联动（setPlayMode 调用 + 启动首次渲染） */
+function renderSop() {
+  el('sopTable').tBodies[0].innerHTML =
+    PLAY_MODES[state.playMode].sop.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+}
 
 /* 接收端命令生成（Story 6，issue #18/#21/#22）：复制按钮与 frames.json 同源。
    命令随发送模式（desktop/images）与播放模式（全屏/窗口）联动：窗口播放
@@ -817,6 +876,7 @@ function setPlayMode(mode) {
   el('modeWindow').setAttribute('aria-pressed', String(mode === 'window'));
   el('stopHint').textContent = m.stopHint;
   el('windowSizeRow').hidden = mode !== 'window';   // 窗口画面尺寸仅窗口模式可设
+  renderSop();   // 两端 SOP 随播放模式联动（issue #36）
   setStatus(`播放模式：${m.label}（${m.source}）`);
 }
 el('modeFullscreen').addEventListener('click', () => setPlayMode('fullscreen'));
@@ -842,6 +902,13 @@ if (!selfTest()) {
    同一 MIN_RECOMMENDED_ROUNDS 单一事实源 */
 el('roundHint').textContent =
   `停止时机：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）。`;
+
+/* 关键提醒轮数条目（issue #36）：引用同一 MIN_RECOMMENDED_ROUNDS / ROUND_GUIDANCE */
+el('reminderRounds').textContent =
+  `播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止：${ROUND_GUIDANCE}。`;
+
+/* 两端 SOP 首次渲染（默认全屏模式；此后由 setPlayMode 随切换联动，issue #36） */
+renderSop();
 
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
 window.__sender = {
