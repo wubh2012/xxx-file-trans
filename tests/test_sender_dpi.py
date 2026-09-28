@@ -102,3 +102,61 @@ def test_physical_bit_rounds_to_integer(browser, tmp_path):
         assert canvas["w"] == (geo["COLS"] + 2 * geo["PAD"]) * geo["BIT"]
     finally:
         ctx.close()
+
+
+# ---- 窗口播放画布落位（issue #42）：整数物理像素，防亚像素重采样 ----
+
+def make_playing_page_window(browser, dpr, tmp_path, bit_css=None):
+    """窗口播放模式进入播放态。先选模式再载入文件——载入完成即自动开播。"""
+    src = tmp_path / "tiny.bin"
+    src.write_bytes(b"0" * 10000)
+    ctx = browser.new_context(
+        viewport={"width": VIEW_W, "height": VIEW_H},
+        device_scale_factor=dpr,
+    )
+    page = ctx.new_page()
+    page.goto(SENDER.as_uri())
+    page.click("#modeWindow")
+    if bit_css is not None:
+        page.fill("#bit", str(bit_css))
+    page.set_input_files("#file", str(src))
+    page.wait_for_selector("body.playing", timeout=15000)
+    return page, ctx
+
+
+@pytest.mark.parametrize("dpr,bit_css", [(1.0, None), (1.25, 7), (1.5, None)])
+def test_window_canvas_lands_on_integer_physical_pixels(browser, tmp_path, dpr, bit_css):
+    """窗口播放画布 CSS 落位 × dpr 必须是整数物理像素（issue #42）。
+
+    125%/150% 缩放下 flex 居中的分数 CSS 偏移（如 49.2 CSS → 61.5 物理，
+    半像素落位）使浏览器对整画布亚像素重采样：角标实测 23×22（非正方形、
+    23%3≠0），被几何自举候选门槛排除，接收端恒无解。落位须按物理像素取整，
+    且画布完整可见（四角角标不被裁掉）。"""
+    page, ctx = make_playing_page_window(browser, dpr, tmp_path, bit_css=bit_css)
+    try:
+        r = page.evaluate("""() => {
+          const c = document.getElementById('stage');
+          const rect = c.getBoundingClientRect();
+          return { left: rect.left, top: rect.top,
+                   cssW: rect.width, cssH: rect.height,
+                   dpr: window.devicePixelRatio,
+                   innerW: innerWidth, innerH: innerHeight };
+        }""")
+        # 物理落位贴近整数：CSS 偏移 × dpr 距最近整数 < 1/4 物理像素。
+        # 严格整数不可达（CSS 布局量化到 1/64 LayoutUnit，0.8px 步长与之
+        # 不可通约），只需远离 0.5 半像素歧义区——半像素落位时画布左右边
+        # 缘各自吸附到不同物理像素，渲染宽度 ≠ 位图宽度，整画布被亚像素
+        # 重采样（issue #42 故障机理）
+        assert abs((r["left"] * r["dpr"]) % 1 - 0) < 0.25 or \
+               abs((r["left"] * r["dpr"]) % 1 - 1) < 0.25, r
+        assert abs((r["top"] * r["dpr"]) % 1 - 0) < 0.25 or \
+               abs((r["top"] * r["dpr"]) % 1 - 1) < 0.25, r
+        # CSS 显示尺寸 × dpr 同样贴近位图整数尺寸（1 位图 px = 1 物理 px）
+        assert abs(r["cssW"] * r["dpr"] - round(r["cssW"] * r["dpr"])) < 0.25, r
+        assert abs(r["cssH"] * r["dpr"] - round(r["cssH"] * r["dpr"])) < 0.25, r
+        # 画布完整可见：四角角标不出视口（几何自举依赖角标）
+        assert r["left"] >= 0 and r["top"] >= 0, r
+        assert r["left"] + r["cssW"] <= r["innerW"] + 1e-6, r
+        assert r["top"] + r["cssH"] <= r["innerH"] + 1e-6, r
+    finally:
+        ctx.close()

@@ -69,14 +69,17 @@
   canvas[hidden] { display: none; }  /* 作者样式会覆盖 [hidden] 的 UA display:none，须显式还原（否则停止播放后画布仍占位挤压 UI） */
   /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景。
      播放模式一等化（issue #21）：body 同时标注当前模式。全屏画布锚定
-     画面左上角（既有行为）；窗口画布居中、body 内边距垫静默边（背景
-     同色黑，量级不进协议——裁切容忍后任意边距均可，issue #22），几何
-     推导同步减去垫边（WINDOW_PAD_CSS）。停止按钮固定在垫边内、不与
-     画布重叠（亮色元素混入抓屏会污染角标检测），故按钮深色、画布距
-     视口边缘 ≥ 48px。 */
+     画面左上角（既有行为）；窗口画布由 JS 显式落位（snapCanvasPlacement，
+     物理像素取整）、body 内边距垫静默边（背景同色黑，量级不进协议——
+     裁切容忍后任意边距均可，issue #22），几何推导同步减去垫边
+     （WINDOW_PAD_CSS）。停止按钮固定在垫边内、不与画布重叠（亮色元素
+     混入抓屏会污染角标检测），故按钮深色、画布距视口边缘 ≥ 48px。 */
   body.playing #ui { display: none; }
   body.playing { justify-content: flex-start; align-items: flex-start; overflow: hidden; }
-  body.playing.window { justify-content: center; align-items: center; padding: 48px; }
+  /* 窗口画布不用 flex 居中：CSS 偏移在 125%/150% 缩放下带分数物理像素，
+     整画布被亚像素重采样、角标实测非正方形，几何自举恒无解（issue #42），
+     落位由 snapCanvasPlacement 以整数物理像素显式给出 */
+  body.playing.window { padding: 48px; }
   #stopBtn {
     display: none; position: fixed; top: 8px; right: 8px; z-index: 10;
     background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px;
@@ -389,6 +392,32 @@ function setupCanvas() {
   frameImage = gridCtx.createImageData(COLS, ROWS);
 }
 
+/* 窗口播放画布落位：物理像素取整（issue #42）。
+   flex 居中的 CSS 偏移在 125%/150% 等非整数缩放下常带分数物理像素
+   （如 49.2 CSS px → 61.5 物理 px，半像素落位），浏览器对整画布做亚像素
+   重采样——角标实测非正方形（23×22）、网格游程混乱，接收端几何自举恒
+   无解。改为显式 margin：偏移 = round(理想 CSS × dpr) / dpr，物理偏移恒
+   为整数，位图 1:1 落在物理像素网格上。
+   理想偏移保持旧 flex 居中口径（视口减四周垫边的内容框内居中），溢出时
+   收进视口内贴边——四角角标完整可见是几何自举的前提，不两侧裁切。 */
+function snapCanvasPlacement() {
+  const dpr = window.devicePixelRatio || 1;
+  if (state.playMode !== 'window') {
+    stage.style.marginLeft = stage.style.marginTop = '0px';   // 全屏贴左上角（既有行为）
+    return;
+  }
+  const cssW = stage.width / dpr, cssH = stage.height / dpr;
+  const pad = WINDOW_PAD_CSS;
+  const idealL = pad + (innerWidth - 2 * pad - cssW) / 2;
+  const idealT = pad + (innerHeight - 2 * pad - cssH) / 2;
+  const left = Math.min(Math.max(idealL, 0), Math.max(0, innerWidth - cssW));
+  const top = Math.min(Math.max(idealT, 0), Math.max(0, innerHeight - cssH));
+  // margin 相对内容框（垫边之内）：目标总偏移按物理取整后扣除 CSS 垫边，
+  // 垫边自身 dpr 为分数（如 110% 缩放）时由 margin 一并补偿
+  stage.style.marginLeft = (Math.round(left * dpr) / dpr - pad) + 'px';
+  stage.style.marginTop = (Math.round(top * dpr) / dpr - pad) + 'px';
+}
+
 function renderGrid(gridBytes) {
   const { BIT, PAD, COLS, ROWS } = state.geo;
   const px = frameImage.data;                       // 先全白（0），再点黑（1）
@@ -526,6 +555,7 @@ async function startPlayback() {
   setupCanvas();
   stage.hidden = false;
   document.body.classList.add('playing', state.playMode);   // 模式标注供样式与自动化
+  snapCanvasPlacement();   // 窗口画布整数物理落位（issue #42）
   state.playing = true;
   setParamsLocked(true);   // 播放中参数锁定（issue #34）：几何已定格，输入置灰
   // 标题栏进度（issue #33）：保存播放前标题，起始即写一次（loop 内秒级节流接管）
@@ -974,6 +1004,11 @@ stage.addEventListener('click', () => {
 });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopPlayback(); });
 el('stopBtn').addEventListener('click', stopPlayback);
+/* 播放中窗口尺寸 / 跨屏缩放变化：重新落位（几何参数已锁定，只挪位置，
+   位图与 dpr 相关的落位取整随新 dpr 重算，issue #42） */
+window.addEventListener('resize', () => {
+  if (state.playing) snapCanvasPlacement();
+});
 
 /* 配置记忆恢复（issue #34）：置于自检之前，自检失败的状态提示不被
    setPlayMode 的模式文案覆盖；无存储记录 / 存储不可用时保持页面默认值 */
