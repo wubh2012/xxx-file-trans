@@ -64,6 +64,7 @@
     padding: 4px 12px; cursor: pointer; font: inherit;
   }
   .modeBtn[aria-pressed="true"] { background: #123; color: #fff; border-color: #8cf; }
+  #ui input[type="number"]:disabled, .modeBtn:disabled { opacity: .5; cursor: default; }
   canvas { display: block; image-rendering: pixelated; }  /* 非整数 DPR 下仍按最近邻放大，方块边缘不插值 */
   canvas[hidden] { display: none; }  /* 作者样式会覆盖 [hidden] 的 UA display:none，须显式还原（否则停止播放后画布仍占位挤压 UI） */
   /* 播放中隐藏一切 UI，画布外沿只留与静默区同色的黑背景。
@@ -102,11 +103,18 @@
   </fieldset>
   <fieldset>
     <legend>发送参数</legend>
+    <p id="presetRow">
+      <button id="presetDesktop" type="button" class="modeBtn"
+        title="desktop 抓屏主路径：窗口播放（配 desktop 源 --region pick）+ BIT 6 / FPS 20（benchmark 实投安全上限 30fps、建议 15–20，见 benchmark/report-live.md）。预设只是填参，仍可手动微调">预设：desktop 抓屏（窗口 · BIT 6 · FPS 20）</button>
+      <button id="presetCamera" type="button" class="modeBtn"
+        title="camera 拍摄：全屏播放 + BIT 8（benchmark 稳定档同款，大块抗拍摄糊帧）/ FPS 10 保守节拍（camera 无实投数据，按保守口径取值）。预设只是填参，仍可手动微调">预设：camera 拍摄（全屏 · BIT 8 · FPS 10）</button>
+    </p>
     <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）。默认 6 在 125% 缩放下为物理 BIT=8，兼顾吞吐与稳定性">BIT <input id="bit" type="number" min="1" max="15" value="6"> px/块</label>
     <label title="数据网格四周黑色静默区的宽度，单位为 BIT 像素的倍数。用于隔离画面背景并容纳四角白色角标（角标边长 = 3×BIT，故必须 ≥ 3）。接收端按帧头声明的 PAD 校验，采集画面可任意裁切边距">PAD <input id="pad" type="number" min="3" max="15" value="3"> ×BIT</label>
     <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传（单向信道丢一帧＝等整个循环重播）。camera 拍摄建议保守；desktop 抓屏（DXGI）实测安全上限 30fps（benchmark 实测 45+ 缺帧收不齐），建议 15–20">FPS <input id="fps" type="number" min="1" max="60" value="15"></label>
     <span id="fpsWarn" class="hint" hidden>⚠ FPS > 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
     <p class="hint">BIT＝方块边长（px/块，越大越稳但越慢）；PAD＝网格四周黑色静默边（×BIT，容纳角标）；FPS＝每秒帧数（越高越快，拍摄易糊帧）。悬停各参数可看详细说明。</p>
+    <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
   </fieldset>
   <fieldset>
     <legend>播放模式</legend>
@@ -246,7 +254,7 @@ function deriveGeometry() {
   if (cols * rows - 208 < 8) throw new Error('数据区容量不足（BIT 过大或屏幕过小）');
   const chunkSize = (cols * rows - 208) / 8;            // 208 bit 帧头之外的整字节容量
   const fps = clampInt(el('fps').value, 1, 60);
-  el('fpsWarn').hidden = fps <= 30;   // 高 FPS 护航：>30 提示先 calibrate 实测误帧率（issue #28）
+  syncFpsWarn();   // 高 FPS 护航提示（issue #28）
   return { BIT: bit, PAD: pad, COLS: cols, ROWS: rows, FPS: fps, chunkSize };
 }
 
@@ -519,6 +527,7 @@ async function startPlayback() {
   stage.hidden = false;
   document.body.classList.add('playing', state.playMode);   // 模式标注供样式与自动化
   state.playing = true;
+  setParamsLocked(true);   // 播放中参数锁定（issue #34）：几何已定格，输入置灰
   // 标题栏进度（issue #33）：保存播放前标题，起始即写一次（loop 内秒级节流接管）
   titleBeforePlayback = document.title;
   roundNo = 1; playbackStartTs = 0; lastTitleTs = -1e9;
@@ -545,6 +554,7 @@ function stopPlayback() {
   }
   stage.hidden = true;
   document.body.classList.remove('playing', 'fullscreen', 'window');
+  setParamsLocked(false);   // 参数锁定随播放生命周期解除（issue #34）
   el('playBtn').disabled = false;   // 文件已加载，可直接换模式重播
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
@@ -821,6 +831,11 @@ function clampInt(v, lo, hi) {
   const n = parseInt(v, 10);
   return isNaN(n) ? lo : Math.min(hi, Math.max(lo, n));
 }
+function syncFpsWarn() {
+  // 高 FPS 护航警示显隐（issue #28）单处实现：与 deriveGeometry 同口径钳位后判断
+  //（预设 / 恢复 / 输入 / 推导四处共用，issue #34 评审提取）
+  el('fpsWarn').hidden = clampInt(el('fps').value, 1, 60) <= 30;
+}
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -858,15 +873,82 @@ const drop = el('drop'), fileInput = el('file');
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
 el('fps').addEventListener('input', () => {
-  // 高 FPS 护航实时提示（issue #28）：与 deriveGeometry 同口径钳位后判断
-  el('fpsWarn').hidden = clampInt(el('fps').value, 1, 60) <= 30;
+  syncFpsWarn();   // 高 FPS 护航实时提示（issue #28）
+  saveConfig();   // 配置记忆（issue #34）
 });
+for (const id of ['bit', 'winW', 'winH']) {   // 其余记忆项输入即存档（PAD 非记忆项）
+  el(id).addEventListener('input', saveConfig);
+}
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
   if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
+
+/* ---------- 场景预设档 + 配置记忆（issue #34）---------- */
+/* 预设档：按 benchmark 实测口径一键填参。desktop 抓屏主路径（v3 实投：
+   安全上限 30fps、建议 15–20，取 20）配窗口播放；camera 拍摄无实投
+   数据，按保守口径 FPS 10、BIT 取 benchmark 稳定档同款 8。预设只是
+   填参，应用后仍可手动微调；全部走输入控件 + setPlayMode 这同一套
+   状态通道，不另起第二份配置真相。 */
+const PRESETS = {
+  desktop: { playMode: 'window', bit: 6, fps: 20 },
+  camera:  { playMode: 'fullscreen', bit: 8, fps: 10 },
+};
+function applyPreset(name) {
+  const p = PRESETS[name];
+  el('bit').value = p.bit;
+  el('fps').value = p.fps;
+  syncFpsWarn();
+  setPlayMode(p.playMode);
+}
+
+/* 配置记忆：file:// 下 localStorage 可用，记住 BIT/FPS/播放模式（含窗口
+   尺寸），刷新或重开页面后恢复；无存储记录时保持页面默认值。读写全部
+   try/catch 包裹，隐私模式 / 禁用存储 / 数据损坏时静默降级，页面零影响。
+   键名带版本号，未来 schema 变更不误读旧数据。 */
+const STORAGE_KEY = 'sender.config.v1';
+const REMEMBER_KEYS = ['bit', 'fps', 'playMode', 'winW', 'winH'];
+function saveConfig() {
+  try {
+    const cfg = {};
+    for (const k of REMEMBER_KEYS) {
+      cfg[k] = k === 'playMode' ? state.playMode : el(k).value;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+  } catch (e) { /* 静默降级：存储不可用时改动只影响本次会话 */ }
+}
+function restoreConfig() {
+  let cfg;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    cfg = raw ? JSON.parse(raw) : null;
+  } catch (e) { return; }   // 存储不可用或数据损坏：用默认值
+  if (!cfg) return;
+  // 按字段降级：单个字段损坏只跳过该字段，不连累其余记忆项
+  const bit = parseInt(cfg.bit, 10);
+  if (!isNaN(bit)) el('bit').value = clampInt(bit, 1, 15);
+  const fps = parseInt(cfg.fps, 10);
+  if (!isNaN(fps)) el('fps').value = clampInt(fps, 1, 60);
+  el('winW').value = cfg.winW || '';
+  el('winH').value = cfg.winH || '';
+  syncFpsWarn();
+  if (cfg.playMode === 'fullscreen' || cfg.playMode === 'window') {
+    setPlayMode(cfg.playMode);
+  }
+}
+
+/* 播放中参数锁定（issue #34）：几何与帧序列在 startPlayback 经
+   deriveGeometry 定格，播放中改参不生效却无提示。参数输入连同预设 /
+   模式按钮一并置灰（播放态 UI 整体隐藏，置灰是显式状态兜底，防自动
+   化或非常规路径误改），锁定提示随开合显隐；停止播放恢复可编辑。 */
+const PARAM_LOCK_IDS = ['bit', 'pad', 'fps', 'winW', 'winH',
+                        'modeFullscreen', 'modeWindow', 'presetDesktop', 'presetCamera'];
+function setParamsLocked(locked) {
+  for (const id of PARAM_LOCK_IDS) el(id).disabled = locked;
+  el('paramLockHint').hidden = !locked;
+}
 
 /* ---------- 播放模式一等化（issue #21）：全屏 / 窗口显式切换 ---------- */
 function setPlayMode(mode) {
@@ -878,9 +960,12 @@ function setPlayMode(mode) {
   el('windowSizeRow').hidden = mode !== 'window';   // 窗口画面尺寸仅窗口模式可设
   renderSop();   // 两端 SOP 随播放模式联动（issue #36）
   setStatus(`播放模式：${m.label}（${m.source}）`);
+  saveConfig();   // 配置记忆（issue #34）：播放模式是记忆项之一，切换即存档
 }
 el('modeFullscreen').addEventListener('click', () => setPlayMode('fullscreen'));
 el('modeWindow').addEventListener('click', () => setPlayMode('window'));
+el('presetDesktop').addEventListener('click', () => applyPreset('desktop'));
+el('presetCamera').addEventListener('click', () => applyPreset('camera'));
 el('playBtn').addEventListener('click', () => { if (state.compBuf) startPlayback(); });
 
 stage.addEventListener('click', () => {
@@ -889,6 +974,10 @@ stage.addEventListener('click', () => {
 });
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopPlayback(); });
 el('stopBtn').addEventListener('click', stopPlayback);
+
+/* 配置记忆恢复（issue #34）：置于自检之前，自检失败的状态提示不被
+   setPlayMode 的模式文案覆盖；无存储记录 / 存储不可用时保持页面默认值 */
+restoreConfig();
 
 if (!selfTest()) {
   setStatus('CRC 自检未通过（期望 CRC32("123456789") == 0xCBF43926），已禁用发送', true);
