@@ -331,22 +331,26 @@ class ReceiverGui:
         self.stop_btn.config(state="disabled")
         self._progress.pack_forget()
         self.status_var.set("待机")
+        # 非致命告警（meta 落盘降级等，issue #43）随结果一并露出，不推翻成败
+        suffix = "".join(f"\n{w}" for w in result.warnings)
         if result.code == 0:
             # 与 #25 摘要口径一致：友好大小 / 耗时 / 速率 / 帧 N/M / sha256
             self.result_var.set(
                 restore_summary(result.name, result.plain_size, result.elapsed,
                                 result.received, result.total, result.sha256)
-                + f"\n已保存到 {result.dest}")
+                + f"\n已保存到 {result.dest}" + suffix)
             self.result_label.config(foreground="#106b21")
         elif result.stopped:
             self.result_var.set(
                 f"已停止：{result.incomplete}\n"
-                f"已保留 {result.received} 帧，重新接收同一文件（同 fileId）可续传。")
+                f"已保留 {result.received} 帧，重新接收同一文件（同 fileId）可续传。"
+                + suffix)
             self.result_label.config(foreground="#8a6d00")
         else:
             self.result_var.set(
                 f"接收失败：{result.error}"
-                + (f"\n{result.incomplete}" if result.incomplete else ""))
+                + (f"\n{result.incomplete}" if result.incomplete else "")
+                + suffix)
             self.result_label.config(foreground="#a12020")
         self.result_label.pack(fill="x")
         if self._closing:

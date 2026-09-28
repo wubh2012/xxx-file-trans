@@ -347,3 +347,62 @@ def test_iter_desktop_close_releases_camera(fake_dxcam):
     next(gen)
     gen.close()
     assert fake.camera is not None and fake.camera.released
+
+
+def _install_finalizing_threading(monkeypatch):
+    """把 desktop 模块的 threading 换成「解释器关闭期」替身：线程创建被禁
+    （RuntimeError，3.13+ 为其子类 PythonFinalizationError），Event 仍可用。"""
+    import threading
+
+    import receiver.sources.desktop as desktop_module
+
+    class FinalizingThreading:
+        Event = threading.Event
+
+        @staticmethod
+        def Thread(*args, **kwargs):
+            raise RuntimeError("can't create new thread at interpreter shutdown")
+
+    monkeypatch.setattr(desktop_module, "threading", FinalizingThreading)
+    return desktop_module
+
+
+def test_release_camera_falls_back_to_sync_stop_at_finalization(monkeypatch):
+    """解释器关闭期线程创建被禁 → 回退同步 stop + release，清理路径不得
+    二次崩溃把退出码从业务失败搅成解释器错误（issue #43）。"""
+    from receiver.sources.desktop import _release_dxgi_camera
+
+    class Camera:
+        released = False
+        stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+        def release(self):
+            self.released = True
+
+    _install_finalizing_threading(monkeypatch)
+    camera = Camera()
+    _release_dxgi_camera(camera)
+    assert camera.stopped and camera.released
+
+
+def test_release_camera_sync_stop_failure_still_releases(monkeypatch):
+    """同步回退路径上 stop 自身抛错（dxcam 内部已崩）：同样吞掉，
+    release 照常执行，不覆盖原始业务错误。"""
+    from receiver.sources.desktop import _release_dxgi_camera
+
+    class Camera:
+        released = False
+
+        def stop(self):
+            raise RuntimeError("capture thread already dead")
+
+        def release(self):
+            self.released = True
+
+    _install_finalizing_threading(monkeypatch)
+    camera = Camera()
+    _release_dxgi_camera(camera)
+    assert camera.released

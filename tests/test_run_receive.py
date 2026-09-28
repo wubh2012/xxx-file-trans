@@ -165,6 +165,31 @@ class TestSuccess:
         assert totals and totals[-1][1] == n_data, "set_total 上报总帧数"
 
 
+# ---------- meta 落盘降级告警的统一出口（issue #43） ----------
+
+class TestStoreWarningsSurfaced:
+    def test_meta_warning_surfaces_without_breaking_restore(self, tmp_path, progress_root, monkeypatch):
+        """meta.json 落盘失败降级为告警后：还原照常成功（code 0），
+        告警经 store.warnings 汇入 ReceiveResult.warnings（CLI/GUI 统一出口）。"""
+        import receiver.store as store_mod
+
+        def locked_replace(src, dst):
+            raise PermissionError(32, "另一个程序正在使用此文件，进程无法访问。")
+
+        monkeypatch.setattr(store_mod.os, "replace", locked_replace)
+        monkeypatch.setattr(store_mod.time, "sleep", lambda _s: None)
+        src = os.urandom(2000)
+        file_id = zlib.crc32(src) & 0xFFFFFFFF
+        frames_dir = tmp_path / "frames"
+        export_ok(src, frames_dir, "warn.bin", file_id)
+
+        result = run_receive(iter_frames(frames_dir), tmp_path / "out")
+
+        assert result.code == 0, "meta 是辅助产物，不得覆盖传输成败"
+        assert result.dest is not None and result.dest.read_bytes() == src
+        assert any("meta.json" in w for w in result.warnings)
+
+
 # ---------- 协作式停止：stop_check 注入缝 ----------
 
 class TestStopCheck:

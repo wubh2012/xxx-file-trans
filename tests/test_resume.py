@@ -295,6 +295,105 @@ class TestResume:
         store.close()
 
 
+# ---------- meta.json 落盘抗文件占用（issue #43） ----------
+
+class TestMetaWriteResilience:
+    """os.replace 撞 WinError 32（Defender / 索引器对刚高频写入的任务目录
+    瞬时扫描）：有限退避重试消化，仍失败降级为告警——meta 是辅助产物，
+    不得让收帧崩溃、不得覆盖传输成败。"""
+
+    @pytest.fixture
+    def locked_replace(self, monkeypatch):
+        """把 store 模块视角的 os.replace / Path.write_text 换成可编程替身，
+        sleep 免真实等待；failures_left 卡 replace 侧、write_failures_left
+        卡 meta.json.tmp 的写入侧（meta.json 自身的写不受影响）。"""
+        import receiver.store as store_mod
+        real_replace = os.replace
+        real_write = Path.write_text
+        state = {"failures_left": 0, "write_failures_left": 0}
+
+        def replace(src, dst):
+            if state["failures_left"] > 0:
+                state["failures_left"] -= 1
+                raise PermissionError(32, "另一个程序正在使用此文件，进程无法访问。")
+            real_replace(src, dst)
+
+        def write_text(path, data, encoding=None):
+            if state["write_failures_left"] > 0 and path.name == "meta.json.tmp":
+                state["write_failures_left"] -= 1
+                raise PermissionError(32, "另一个程序正在使用此文件，进程无法访问。")
+            return real_write(path, data, encoding=encoding)
+
+        monkeypatch.setattr(store_mod.os, "replace", replace)
+        monkeypatch.setattr(Path, "write_text", write_text)
+        monkeypatch.setattr(store_mod.time, "sleep", lambda _s: None)
+        return state
+
+    def test_write_meta_retries_through_temporary_lock(self, tmp_path, locked_replace):
+        """瞬时占用在前 2 次重试内恢复 → meta.json 照常原子落盘，无告警。"""
+        locked_replace["failures_left"] = 2
+        store = FrameStore(tmp_path)
+
+        store.add(data_frame(0, 4, 100))
+
+        meta = json.loads(
+            (task_dir(tmp_path, 0xDEADBEEF) / "meta.json").read_text("utf-8"))
+        assert meta["total_frames"] == 4
+        assert not (task_dir(tmp_path, 0xDEADBEEF) / "meta.json.tmp").exists()
+        assert store.warnings == []
+        store.close()
+
+    def test_write_meta_retries_when_tmp_write_locked(self, tmp_path, locked_replace):
+        """占用发生在 tmp 写入侧（不只 replace 侧）→ 同样退避重试消化，
+        meta.json 照常落盘、无告警。"""
+        locked_replace["write_failures_left"] = 2
+        store = FrameStore(tmp_path)
+
+        store.add(data_frame(0, 4, 100))
+
+        meta = json.loads(
+            (task_dir(tmp_path, 0xDEADBEEF) / "meta.json").read_text("utf-8"))
+        assert meta["total_frames"] == 4
+        assert store.warnings == []
+        store.close()
+
+    def test_write_meta_locked_persistently_degrades_to_warning(self, tmp_path, locked_replace):
+        """持续占用重试耗尽 → 不抛异常、收帧照常，降级为一条告警；
+        降级前清掉 tmp，不留脏文件。"""
+        locked_replace["failures_left"] = 10 ** 9  # 恒失败
+        store = FrameStore(tmp_path)
+
+        assert store.add(data_frame(0, 4, 100)) is True, "meta 落盘失败不得让收帧崩溃"
+        assert store.add(data_frame(1, 4, 100)) is True, "后续帧照常接收"
+
+        tdir = task_dir(tmp_path, 0xDEADBEEF)
+        assert len(store.warnings) == 1
+        assert "meta.json" in store.warnings[0]
+        assert "进度不保留" in store.warnings[0], "meta 缺失时重启按新任务重建，须言明"
+        assert (tdir / "data.bin").stat().st_size == 400, "数据落盘不受影响（定长容量 total×chunk）"
+        assert not (tdir / "meta.json.tmp").exists()
+        store.close()
+
+    def test_metadata_overwrite_failure_keeps_old_meta(self, tmp_path, locked_replace):
+        """meta.json 已在盘（锁定时写成功）、其后元数据帧覆盖失败：旧 meta
+        保持可用，告警不得宣称进度不保留。"""
+        store = FrameStore(tmp_path)
+        for n in range(4):
+            store.add(data_frame(n, 4, 100))
+        locked_replace["failures_left"] = 10 ** 9
+
+        store.add(meta_frame(4, 100, name="续传.bin"))
+
+        assert store.metadata is not None, "元数据帧照常收纳进内存"
+        assert store.is_complete() is True, "本进程还原判据不受 meta 落盘失败影响"
+        assert len(store.warnings) == 1
+        assert "保留旧 meta" in store.warnings[0]
+        old = json.loads(
+            (task_dir(tmp_path, 0xDEADBEEF) / "meta.json").read_text("utf-8"))
+        assert old["metadata"] is None, "旧 meta 未被失败的覆盖破坏"
+        store.close()
+
+
 # ---------- 缝 B：CLI 子进程外沿（崩溃重启 / 迟加入 / 锁定告警） ----------
 
 @pytest.fixture

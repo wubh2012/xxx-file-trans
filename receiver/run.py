@@ -175,6 +175,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
             incomplete=incomplete_summary(timer.elapsed,
                                           store.received_count(), store.total_frames),
         )
+        result.warnings.extend(store.warnings)
         if prefetched is not None:
             result.queue_produced = prefetched.stats.produced
             result.queue_dropped = prefetched.stats.dropped
@@ -245,6 +246,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
             elapsed=elapsed, received=store.received_count(),
             total=store.total_frames, sha256=hashlib.sha256(plain).hexdigest(),
         )
+        result.warnings.extend(store.warnings)  # meta 落盘降级告警（issue #43）
         if prefetched is not None:
             result.queue_produced = prefetched.stats.produced
             result.queue_dropped = prefetched.stats.dropped

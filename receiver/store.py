@@ -15,9 +15,11 @@
 − (total−1)×chunkSize，在 assemble() 统一截断；元数据缺失时本就不还原。
 """
 
+import contextlib
 import json
 import os
 import shutil
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -35,6 +37,13 @@ from receiver.protocol import (
 
 class IncompleteError(Exception):
     """数据帧未收齐，不能拼装。"""
+
+
+# meta.json 原子写的 os.replace 在 Windows 可能撞瞬时文件占用（WinError 32，
+# Defender / 索引器扫描刚高频写入的任务目录，issue #43）：有限退避重试消化；
+# 重试耗尽降级为告警而非崩溃——meta 是辅助产物，不得覆盖传输成败。
+META_REPLACE_RETRIES = 5
+META_REPLACE_BACKOFF_S = 0.05
 
 
 class FrameStore:
@@ -63,6 +72,9 @@ class FrameStore:
         self._bitmap_file = None
         self._fec_parity: dict[tuple[int, int], bytes] = {}
         self._metadata_file_id: int | None = None  # 元数据帧所属 fileId（防异帧毒化）
+        # 公共出口（区别于 _ 前缀的内部状态）：非致命告警（meta 落盘降级等）
+        # 由此汇入 ReceiveResult.warnings，经 CLI / GUI 统一渲染，不打印到 stdout
+        self.warnings: list[str] = []
 
     # ---------- 收帧 ----------
 
@@ -271,7 +283,14 @@ class FrameStore:
         return (self._bitmap[n >> 3] >> (7 - (n & 7))) & 1
 
     def _write_meta(self) -> None:
-        """meta.json 原子写（N2）：tmp + os.replace。锁定时与元数据到达时各写一次。"""
+        """meta.json 原子写（N2）：tmp + os.replace。锁定时与元数据到达时各写一次。
+
+        Windows 下 os.replace 可能撞 WinError 32（Defender / 索引器对刚高频
+        写入的任务目录瞬时扫描，issue #43）：有限退避重试消化；重试耗尽
+        降级为告警而非崩溃——meta 是辅助产物，本进程还原不读它，不得覆盖
+        传输成败；但 meta 缺失时重启续传按新任务重建（进度不保留），须在
+        告警中言明，操作员才能决定是否手动清空或接受。
+        """
         if self.task_dir is None:
             return
         meta = {
@@ -290,8 +309,27 @@ class FrameStore:
             },
         }
         tmp = self.task_dir / "meta.json.tmp"
-        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.task_dir / "meta.json")
+        target = self.task_dir / "meta.json"
+        # tmp 写入与 replace 一并纳入重试：占用方（瞬时扫描）同样可能
+        # 卡在新建 tmp 上，不只 os.replace 的替换侧。
+        for _ in range(META_REPLACE_RETRIES):
+            try:
+                tmp.write_text(
+                    json.dumps(meta, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+                os.replace(tmp, target)
+                return
+            except PermissionError as e:
+                last_error = e
+                time.sleep(META_REPLACE_BACKOFF_S)
+        hint = ("保留旧 meta 继续接收" if target.is_file()
+                else "重启后任务目录将按新任务重建，进度不保留")
+        self.warnings.append(
+            f"告警：meta.json 落盘失败（文件被占用，重试 {META_REPLACE_RETRIES} 次未成功）："
+            f"{last_error}；接收与本进程还原不受影响，{hint}"
+        )
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
     def close(self) -> None:
         """释放 data.bin 句柄（Windows 下不关句柄会阻碍任务目录清理）。"""

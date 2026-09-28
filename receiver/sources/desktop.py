@@ -39,14 +39,18 @@ DXGI_SHUTDOWN_TIMEOUT_S = 0.5
 
 
 def _release_dxgi_camera(camera) -> None:
-    """先停 threaded capture 再释放 DXGI 资源，避免残留线程抢占单例。"""
+    """先停 threaded capture 再释放 DXGI 资源，避免残留线程抢占单例。
+
+    解释器关闭期（issue #43）线程创建被禁（RuntimeError，3.13+ 为其子类
+    PythonFinalizationError）：回退同步 stop——此刻接收循环已结束，即便
+    dxcam 内部采集线程卡住也不再有等待它的消费者；stop 自身再抛错同样
+    吞掉，release 照常执行，不覆盖上层原始业务错误。"""
     if camera is None:
         return
     stop = getattr(camera, "stop", None)
     if stop is not None:
-        done = threading.Event()
 
-        def stop_worker():
+        def stop_worker(done: threading.Event):
             try:
                 stop()
             except Exception:  # noqa: BLE001 释放阶段不覆盖原始错误
@@ -54,8 +58,20 @@ def _release_dxgi_camera(camera) -> None:
             finally:
                 done.set()
 
-        threading.Thread(target=stop_worker, daemon=True,
-                         name="dxgi-stop").start()
+        try:
+            done = threading.Event()  # 关闭期线程相关设施一并可能不可用
+            threading.Thread(target=stop_worker, args=(done,), daemon=True,
+                             name="dxgi-stop").start()
+        except RuntimeError:
+            try:
+                stop()
+            except Exception:  # noqa: BLE001 释放阶段不覆盖原始错误
+                pass
+            try:
+                camera.release()
+            except Exception:  # noqa: BLE001 释放阶段不覆盖原始错误
+                pass
+            return
         if not done.wait(DXGI_SHUTDOWN_TIMEOUT_S):
             # dxcam 的内部采集线程可能卡在 AcquireNextFrame；不能让接收
             # 主循环同步等待。旧实例由其 daemon 线程自行结束，当前任务
