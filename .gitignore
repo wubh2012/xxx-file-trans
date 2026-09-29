@@ -13,3 +13,4 @@ benchmark/results/work/
 .playwright-mcp/
 build/
 dist/
+receiver_gui.spec
