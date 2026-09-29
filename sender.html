@@ -27,37 +27,56 @@
   body {
     background: #000;              /* 与静默区同色，画布外沿干净 */
     color: #ddd;
-    font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+    font: 13px/1.55 system-ui, "Microsoft YaHei", sans-serif;
     display: flex; align-items: center; justify-content: center;
-    overflow: auto;                /* SOP / 提醒块使页面变高，小视口下允许滚动（播放态恢复隐藏，见 body.playing） */
+    overflow: auto;                /* 窄视口下允许滚动（播放态恢复隐藏，见 body.playing） */
   }
-  #ui { max-width: 640px; padding: 24px; }
-  h1 { font-size: 18px; color: #fff; margin: 0 0 12px; }
-  fieldset { border: 1px solid #333; border-radius: 6px; margin: 0 0 12px; }
+  /* 一屏化双栏重排：左列＝操作流（选文件 → 调参 → 播放 → 信息表），
+     右列＝参照区（两端 SOP / 关键提醒 / 导出说明）。标题行通栏放状态栏；
+     宽度不足 940px 时回落单列，纵向顺序保持「操作在前、参照在后」。 */
+  #ui {
+    max-width: 1100px; width: 100%; padding: 14px 20px 20px;
+    display: grid; grid-template-columns: minmax(340px, 430px) minmax(400px, 1fr);
+    gap: 2px 28px; align-items: start;
+  }
+  @media (max-width: 940px) { #ui { grid-template-columns: 1fr; } }
+  #ui > section { min-width: 0; }
+  #masthead {
+    grid-column: 1 / -1; display: flex; align-items: baseline;
+    flex-wrap: wrap; gap: 2px 16px; margin-bottom: 6px;
+  }
+  h1 { font-size: 17px; color: #fff; margin: 0; }
+  #status { flex: 1 1 320px; min-width: 0; margin: 0; color: #8cf; min-height: 1.5em; }
+  fieldset { border: 1px solid #333; border-radius: 6px; margin: 0 0 10px; min-width: 0; }
   legend { color: #aaa; padding: 0 6px; }
-  label { margin-right: 14px; white-space: nowrap; }
-  input[type="number"] { width: 64px; background: #111; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; }
+  fieldset p { margin: 6px 0 0; }
+  fieldset p:first-of-type { margin-top: 2px; }
+  label { margin-right: 12px; white-space: nowrap; }
+  input[type="number"] { width: 60px; background: #111; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; }
   #drop {
-    border: 2px dashed #555; border-radius: 8px; padding: 18px;
-    text-align: center; color: #aaa; margin-bottom: 12px; cursor: pointer;
+    border: 2px dashed #555; border-radius: 8px; padding: 10px 12px;
+    text-align: center; margin-bottom: 10px; cursor: pointer;
   }
+  #drop strong { display: block; color: #ddd; font-weight: normal; }
+  #drop span { display: block; font-size: 12px; color: #777; }
   /* 两端 SOP 表（issue #36）：两栏时序步骤，随播放模式联动（renderSop） */
   #sopTable { width: 100%; border-collapse: collapse; font-size: 12px; }
   #sopTable th, #sopTable td {
-    border: 1px solid #333; padding: 4px 8px; text-align: left; vertical-align: top;
+    border: 1px solid #333; padding: 3px 7px; text-align: left; vertical-align: top;
   }
   #sopTable th { color: #aaa; background: #111; font-weight: normal; white-space: nowrap; }
-  #reminders { margin: 0; padding-left: 18px; }
+  #reminders { margin: 2px 0 0; padding-left: 18px; }
   #drop.over { border-color: #8cf; color: #8cf; }
-  #info { margin: 0 0 12px; padding: 10px 12px; background: #111; border-radius: 6px; }
+  #info { margin: 6px 0 0; padding: 8px 10px; background: #111; border-radius: 6px; font-size: 12px; }
   #info td { padding: 1px 10px 1px 0; }
   #info td:first-child { color: #999; }
-  #status { color: #8cf; min-height: 1.5em; }
-  #stopHint { color: #777; font-size: 12px; }
+  #stopHint { color: #777; font-size: 12px; margin: 6px 0 0; }
+  #actionRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 2px 0 0; }
   #exportBtn, #copyCmdBtn, #playBtn {
     background: #123; color: #eee; border: 1px solid #456; border-radius: 4px;
     padding: 6px 14px; cursor: pointer; font: inherit;
   }
+  #playBtn { font-weight: bold; }
   #exportBtn:disabled, #playBtn:disabled { opacity: .5; cursor: default; }
   .modeBtn {
     background: #111; color: #bbb; border: 1px solid #444; border-radius: 4px;
@@ -86,70 +105,80 @@
     padding: 4px 12px; cursor: pointer; font: inherit;
   }
   body.playing.window #stopBtn { display: block; }
-  #ui .hint { margin: 6px 0 0; font-size: 12px; color: #666; max-width: 480px; }
-  #windowSizeRow { display: inline-block; vertical-align: middle; margin-left: 8px; }
+  #ui .hint { margin: 6px 0 0; font-size: 12px; color: #8a919b; }
+  #windowSizeRow { display: block; margin: 6px 0 0; }
   #windowSizeRow[hidden] { display: none; }   /* 显式声明，防上面的 display 覆盖 hidden 的 UA 默认 */
   #windowSizeRow input { width: 5.5em; }
-  #windowSizeRow .hint { max-width: none; }
 </style>
 </head>
 <body>
 <div id="ui">
-  <h1>文件摆渡发送端</h1>
-  <fieldset>
-    <legend>两端操作步骤（摆渡 SOP，随播放模式联动）</legend>
-    <table id="sopTable">
-      <thead><tr><th>发送端（本页）</th><th>接收端</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <p id="sopNote" class="hint">另一条交付路径：无拍摄 / 抓屏条件时，点「导出 PNG 帧序列」→ 把帧序列拷贝到接收侧 → 接收端以 images 源离线还原（详见下方导出说明）。</p>
-  </fieldset>
-  <fieldset>
-    <legend>发送参数</legend>
-    <p id="presetRow">
-      <button id="presetDesktop" type="button" class="modeBtn"
-        title="desktop 抓屏主路径：窗口播放（配 desktop 源 --region pick）+ BIT 6 / FPS 20（benchmark 实投安全上限 30fps、建议 15–20，见 benchmark/report-live.md）。预设只是填参，仍可手动微调">预设：desktop 抓屏（窗口 · BIT 6 · FPS 20）</button>
-      <button id="presetCamera" type="button" class="modeBtn"
-        title="camera 拍摄：全屏播放 + BIT 8（benchmark 稳定档同款，大块抗拍摄糊帧）/ FPS 10 保守节拍（camera 无实投数据，按保守口径取值）。预设只是填参，仍可手动微调">预设：camera 拍摄（全屏 · BIT 8 · FPS 10）</button>
+  <header id="masthead">
+    <h1>文件摆渡发送端</h1>
+    <p id="status"></p>
+  </header>
+  <section id="opsCol">
+    <div id="drop"><strong>点击选择或拖入任意文件</strong><span>gzip 压缩 → 分片封帧 → 按所选模式循环播放</span></div>
+    <input id="file" type="file" hidden>
+    <fieldset>
+      <legend>发送参数</legend>
+      <p id="presetRow">
+        <button id="presetDesktop" type="button" class="modeBtn"
+          title="desktop 抓屏主路径：窗口播放（配 desktop 源 --region pick）+ BIT 6 / FPS 20（benchmark 实投安全上限 30fps、建议 15–20，见 benchmark/report-live.md）。预设只是填参，仍可手动微调">预设：desktop 抓屏（窗口 · BIT 6 · FPS 20）</button>
+        <button id="presetCamera" type="button" class="modeBtn"
+          title="camera 拍摄：全屏播放 + BIT 8（benchmark 稳定档同款，大块抗拍摄糊帧）/ FPS 10 保守节拍（camera 无实投数据，按保守口径取值）。预设只是填参，仍可手动微调">预设：camera 拍摄（全屏 · BIT 8 · FPS 10）</button>
+      </p>
+      <p id="paramRow">
+        <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）。默认 6 在 125% 缩放下为物理 BIT=8，兼顾吞吐与稳定性">BIT <input id="bit" type="number" min="1" max="15" value="6"> px/块</label>
+        <label title="数据网格四周黑色静默区的宽度，单位为 BIT 像素的倍数。用于隔离画面背景并容纳四角白色角标（角标边长 = 3×BIT，故必须 ≥ 3）。接收端按帧头声明的 PAD 校验，采集画面可任意裁切边距">PAD <input id="pad" type="number" min="3" max="15" value="3"> ×BIT</label>
+        <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传（单向信道丢一帧＝等整个循环重播）。camera 拍摄建议保守；desktop 抓屏（DXGI）实测安全上限 30fps（benchmark 实测 45+ 缺帧收不齐），建议 15–20">FPS <input id="fps" type="number" min="1" max="60" value="15"></label>
+        <span id="fpsWarn" class="hint" hidden>⚠ FPS &gt; 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
+      </p>
+      <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
+    </fieldset>
+    <fieldset>
+      <legend>播放模式</legend>
+      <p id="modeRow">
+        <button id="modeFullscreen" type="button" class="modeBtn" aria-pressed="true">全屏播放（camera 拍摄）</button>
+        <button id="modeWindow" type="button" class="modeBtn" aria-pressed="false">窗口播放（desktop 抓屏）</button>
+      </p>
+      <span id="windowSizeRow" hidden>
+        <label title="窗口模式下画面区域的显示尺寸（CSS px，与 BIT 输入同口径，实际按显示缩放换算物理像素）。留空＝随视口自动（减四周垫边）。浏览器页面脚本无法调整窗口大小，请自行把浏览器窗口拉到能容纳画面">窗口画面
+          <input id="winW" type="number" min="64" step="1" placeholder="自动"> ×
+          <input id="winH" type="number" min="64" step="1" placeholder="自动"> px
+        </label>
+        <span class="hint">留空＝随视口自动；填宽高＝画面按该尺寸渲染（播放中调整浏览器窗口不影响几何参数）</span>
+      </span>
+    </fieldset>
+    <p id="actionRow">
+      <button id="playBtn" type="button" disabled>开始播放</button>
+      <button id="exportBtn" type="button">导出 PNG 帧序列（供 images 源还原 / 闭环自测）</button>
+      <button id="copyCmdBtn" type="button">一键复制接收端命令</button>
     </p>
-    <label title="每个方块（1 bit）的边长。越大单帧信息越少、传输越慢，但对拍摄/抓屏清晰度要求越低。输入为 CSS 像素，实际按显示缩放（devicePixelRatio）换算为物理像素，帧头声明物理值（上限 15）。默认 6 在 125% 缩放下为物理 BIT=8，兼顾吞吐与稳定性">BIT <input id="bit" type="number" min="1" max="15" value="6"> px/块</label>
-    <label title="数据网格四周黑色静默区的宽度，单位为 BIT 像素的倍数。用于隔离画面背景并容纳四角白色角标（角标边长 = 3×BIT，故必须 ≥ 3）。接收端按帧头声明的 PAD 校验，采集画面可任意裁切边距">PAD <input id="pad" type="number" min="3" max="15" value="3"> ×BIT</label>
-    <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传（单向信道丢一帧＝等整个循环重播）。camera 拍摄建议保守；desktop 抓屏（DXGI）实测安全上限 30fps（benchmark 实测 45+ 缺帧收不齐），建议 15–20">FPS <input id="fps" type="number" min="1" max="60" value="15"></label>
-    <span id="fpsWarn" class="hint" hidden>⚠ FPS > 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
-    <p class="hint">BIT＝方块边长（px/块，越大越稳但越慢）；PAD＝网格四周黑色静默边（×BIT，容纳角标）；FPS＝每秒帧数（越高越快，拍摄易糊帧）。悬停各参数可看详细说明。</p>
-    <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
-  </fieldset>
-  <fieldset>
-    <legend>播放模式</legend>
-    <button id="modeFullscreen" type="button" class="modeBtn" aria-pressed="true">全屏播放（camera 拍摄）</button>
-    <button id="modeWindow" type="button" class="modeBtn" aria-pressed="false">窗口播放（desktop 抓屏）</button>
-    <span id="windowSizeRow" hidden>
-      <label title="窗口模式下画面区域的显示尺寸（CSS px，与 BIT 输入同口径，实际按显示缩放换算物理像素）。留空＝随视口自动（减四周垫边）。浏览器页面脚本无法调整窗口大小，请自行把浏览器窗口拉到能容纳画面">窗口画面
-        <input id="winW" type="number" min="64" step="1" placeholder="自动"> ×
-        <input id="winH" type="number" min="64" step="1" placeholder="自动"> px
-      </label>
-      <span class="hint">留空＝随视口自动；填宽高＝画面按该尺寸渲染（播放中调整浏览器窗口不影响几何参数）</span>
-    </span>
-  </fieldset>
-  <fieldset>
-    <legend>播放前关键提醒（全程有效）</legend>
-    <ul id="reminders">
-      <li>勿遮挡：帧画面区域不能被任何窗口或物体遮挡（遮挡会污染角标检测与帧画面，无法还原）</li>
-      <li>勿熄屏：系统息屏会让播放停摆（本页播放期间已申请 Wake Lock 防熄屏，个别环境可能不支持）</li>
-      <li>勿切标签页：后台标签页会被浏览器节流至约 1 帧/秒，传输静默停滞且单向信道下无从察觉</li>
-      <li id="reminderRounds"></li>
-    </ul>
-  </fieldset>
-  <div id="drop">点击选择或拖入任意文件<br>（gzip 压缩 → 分片封帧 → 按所选模式循环播放）</div>
-  <input id="file" type="file" hidden>
-  <table id="info" hidden><tbody></tbody></table>
-  <p id="status"></p>
-  <p><button id="playBtn" type="button" disabled>开始播放</button>
-     <button id="exportBtn" type="button">导出 PNG 帧序列（供 images 源还原 / 闭环自测）</button>
-     <button id="copyCmdBtn" type="button">一键复制接收端命令</button></p>
-  <p id="exportHint" class="hint">「导出 PNG 帧序列」的两种用途：① 无拍摄 / 抓屏条件时，把帧序列拷贝到接收侧，用接收端 images 源离线还原（真实交付路径）；② 闭环自测——离线验证发送端与接收端协议一致性。</p>
-  <p id="stopHint">全屏播放：按 Esc 或点击画面即停止并返回本页。</p>
-  <p id="roundHint" class="hint"></p>
+    <p id="stopHint">全屏播放：按 Esc 或点击画面即停止并返回本页。</p>
+    <p id="roundHint" class="hint"></p>
+    <table id="info" hidden><tbody></tbody></table>
+  </section>
+  <section id="refCol">
+    <fieldset>
+      <legend>两端操作步骤（摆渡 SOP，随播放模式联动）</legend>
+      <table id="sopTable">
+        <thead><tr><th>发送端（本页）</th><th>接收端</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="sopNote" class="hint">另一条交付路径：无拍摄 / 抓屏条件时，点「导出 PNG 帧序列」→ 把帧序列拷贝到接收侧 → 接收端以 images 源离线还原（详见下方导出说明）。</p>
+    </fieldset>
+    <fieldset>
+      <legend>播放前关键提醒（全程有效）</legend>
+      <ul id="reminders">
+        <li>勿遮挡：帧画面区域不能被任何窗口或物体遮挡（遮挡会污染角标检测与帧画面，无法还原）</li>
+        <li>勿熄屏：系统息屏会让播放停摆（本页播放期间已申请 Wake Lock 防熄屏，个别环境可能不支持）</li>
+        <li>勿切标签页：后台标签页会被浏览器节流至约 1 帧/秒，传输静默停滞且单向信道下无从察觉</li>
+        <li id="reminderRounds"></li>
+      </ul>
+    </fieldset>
+    <p id="exportHint" class="hint">「导出 PNG 帧序列」的两种用途：① 无拍摄 / 抓屏条件时，把帧序列拷贝到接收侧，用接收端 images 源离线还原（真实交付路径）；② 闭环自测——离线验证发送端与接收端协议一致性。</p>
+  </section>
 </div>
 <button id="stopBtn" type="button">停止播放（Esc）</button>
 <canvas id="stage" hidden></canvas>
