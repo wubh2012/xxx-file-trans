@@ -11,3 +11,5 @@ frames.json
 .tmp/
 benchmark/results/work/
 .playwright-mcp/
+build/
+dist/

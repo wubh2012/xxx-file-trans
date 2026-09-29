@@ -13,7 +13,12 @@
 
 ### GUI（推荐，双击可用）
 
-双击仓库根目录的 **`tapemaker_gui.pyw`**（pythonw 启动，无黑窗口；首次双击会自动转手仓库 venv 解释器）：
+两种形态任选：
+
+- **独立 exe**：`dist/tapemaker_gui.exe`（PyInstaller onefile 打包，双击即用，无需 Python 环境；构建命令见 `tapemaker_gui.spec` 头注）；
+- **脚本版**：双击仓库根目录的 **`tapemaker_gui.pyw`**（pythonw 启动，无黑窗口；首次双击会自动转手仓库 venv 解释器）。
+
+界面与流程：
 
 1. 「浏览…」选待摆渡文件——输出 MP4 自动回填为同目录同名 `.mp4`；
 2. 参数默认即可（BIT 留空 = 按分辨率默认档；窗口内有权衡提示）；
