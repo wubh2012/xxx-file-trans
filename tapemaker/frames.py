@@ -1,4 +1,4 @@
-"""帧序列构建（制带的协议写入侧，issue #38）。
+"""帧序列构建（制片的协议写入侧，issue #38）。
 
 sender.html 之外的第二份封帧实现：CRC / FEC 语义全部落在
 `receiver.protocol` / `receiver.fec`（单一事实来源，防协议漂移），

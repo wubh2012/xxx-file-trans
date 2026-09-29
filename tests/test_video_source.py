@@ -200,11 +200,11 @@ def test_cli_video_unopenable_file_exits_2(tmp_path):
     assert rc == 2
 
 
-# ---------- 带模式（issue #45）：旁路稳定闸门逐帧直读 ----------
+# ---------- 片模式（issue #45）：旁路稳定闸门逐帧直读 ----------
 
 def test_iter_video_tape_mode_emits_every_decoded_frame(tmp_path):
-    """带模式：制带 MP4（ADR-0003）每个传输帧恰出现一次，相邻帧内容全部
-    不同，「稳定两帧」判定永不满足——带模式旁路闸门逐帧直读，帧不滞留、
+    """片模式：制片 MP4（ADR-0003）每个传输帧恰出现一次，相邻帧内容全部
+    不同，「稳定两帧」判定永不满足——片模式旁路闸门逐帧直读，帧不滞留、
     不靠超时兜底。对照：默认闸门路径对同一视频放不出全部帧。"""
     src = b"tape mode"
     paths = _export_frames(tmp_path, src, "tp.bin")

@@ -1,4 +1,4 @@
-"""制带工具 CLI（需求文档 §11.3）。
+"""制片工具 CLI（需求文档 §11.3）。
 
 python -m tapemaker make <文件> -o out.mp4 [--fps N] [--bit N] [--pad N]
     [--rounds N] [--resolution 1080p|4k]
@@ -35,7 +35,7 @@ from tapemaker.frames import (
 )
 from tapemaker.render import TapeWriter, render_frame
 
-MAKE_CRF = 12  # 制带侧码率档：低 CRF 保角标边缘锐利，二压才是主要损失源
+MAKE_CRF = 12  # 制片侧码率档：低 CRF 保角标边缘锐利，二压才是主要损失源
 
 
 def _int_list(text: str) -> list[int]:
@@ -52,11 +52,11 @@ def _int_list(text: str) -> list[int]:
 def _make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tapemaker",
-        description="制带工具：文件编码为方块帧 MP4（视频信道场景，需求文档 §11）",
+        description="制片工具：文件编码为方块帧 MP4（视频信道场景，需求文档 §11）",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    mk = sub.add_parser("make", help="制带：文件 → 方块帧 MP4")
+    mk = sub.add_parser("make", help="制片：文件 → 方块帧 MP4")
     mk.add_argument("file", type=Path, help="待摆渡的源文件")
     mk.add_argument("-o", "--output", type=Path, required=True, help="输出 MP4 路径")
     mk.add_argument("--fps", type=int, default=30, help="视频帧率（默认 30，待定标）")
@@ -70,7 +70,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     cal = sub.add_parser("calibrate", help="模拟二压矩阵定标：CRC 存活率表 + 推荐参数")
     cal.add_argument("file", type=Path, help="定标用样本文件（贴近真实负载）")
-    cal.add_argument("-o", "--output", type=Path, required=True, help="输出目录（存各组合样带）")
+    cal.add_argument("-o", "--output", type=Path, required=True, help="输出目录（存各组合样片）")
     cal.add_argument("--crf", type=_int_list, default=[18, 23, 28],
                      help="模拟二压的 CRF 档位（逗号分隔，默认 18,23,28；值越大压得越狠）")
     cal.add_argument("--bit", type=_int_list, default=None,
@@ -87,7 +87,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
 def _write_tape(out_path: Path, frames: list[Frame], geo: Geometry, fps: int,
                 rounds: int, *, crf: int = MAKE_CRF, gop: int = 1) -> None:
-    """帧序列连播 rounds 轮写入 MP4（make / calibrate 共用写带核心）。"""
+    """帧序列连播 rounds 轮写入 MP4（make / calibrate 共用写片核心）。"""
     writer = TapeWriter(out_path, geo, fps, crf=crf, gop=gop)
     try:
         for _ in range(rounds):
@@ -95,7 +95,7 @@ def _write_tape(out_path: Path, frames: list[Frame], geo: Geometry, fps: int,
                 writer.write(render_frame(frame, geo))
         writer.close()
     except Exception as e:
-        raise writer.fail(f"制带失败：{e}") from e
+        raise writer.fail(f"制片失败：{e}") from e
 
 
 def cmd_make(args: argparse.Namespace) -> int:
@@ -119,7 +119,7 @@ def cmd_make(args: argparse.Namespace) -> int:
 
     total_video_frames = len(frames) * args.rounds
     print(
-        f"制带：{len(plain)} 字节 → gzip {len(payload)} 字节，fileId 0x{file_id:08X}\n"
+        f"制片：{len(plain)} 字节 → gzip {len(payload)} 字节，fileId 0x{file_id:08X}\n"
         f"几何 {geo.canvas_w}×{geo.canvas_h} · COLS {geo.cols} × ROWS {geo.rows} · "
         f"BIT {geo.bit} · PAD {geo.pad} · CHUNK {geo.chunk_size} B\n"
         f"{len(frames)} 帧/轮 × {args.rounds} 轮 = {total_video_frames} 帧 · "
@@ -246,7 +246,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
                 print(f"[{tag}] 完成（{time.monotonic() - t0:.1f}s）")
 
     # 推荐口径（回填 make 默认值）：在最严 CRF 档仍 100% 存活的组合里，
-    # 选最小 BIT（单帧容量最大 → 带最短）；并列选样带更小的策略档。
+    # 选最小 BIT（单帧容量最大 → 片最短）；并列选样片更小的策略档。
     # N / fps 为本次矩阵的运行参数——存活率在该 N 下测得，如实推荐；
     # 降 N 或变 fps 是否仍 100% 存活需重跑定标（spec #40：回填 BIT 下限、N、fps、I 帧策略）。
     harshest = max(args.crf)

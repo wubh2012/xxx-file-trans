@@ -1,10 +1,10 @@
-"""制带工具测试（issue #38，需求文档 §11）。
+"""制片工具测试（issue #38，需求文档 §11）。
 
 三层缝：
   - 帧序列布局（元数据节奏 / FEC 插入 / 轮次口径）与协议上限拦截；
   - 渲染位图直接过 receiver.pipeline.decode_frame（角标几何自举 + CRC
     全链路，receiver.protocol 作 CRC 仲裁）；
-  - 制带出片 → ffmpeg 解码回帧序列 → receiver.run.run_receive 还原，
+  - 制片出片 → ffmpeg 解码回帧序列 → receiver.run.run_receive 还原，
     sha256 与源文件一致（§11.4.1 往返闭环的缝内版；经 video 源完整
     闭环见 issue #39——稳定闸门与带的适配另立 issue）。
 
@@ -120,7 +120,7 @@ def test_round_frames_all_crc_valid_and_header_flags():
 
 def test_parity_recovers_two_missing_frames_with_receiver_fec():
     """抽掉同组 2 个数据分片，receiver.fec.recover_two 用 P0/P1 恢复——
-    制带侧乘法表与接收端恢复必须是同一 GF 语义。"""
+    制片侧乘法表与接收端恢复必须是同一 GF 语义。"""
     chunk = TEST_GEO.chunk_size
     total = FEC_GROUP_SIZE  # 恰好一组
     payload = _payload(chunk * total)
@@ -178,7 +178,7 @@ needs_ffmpeg = pytest.mark.skipif(
 
 @needs_ffmpeg
 def test_make_roundtrip_restore_sha256(tmp_path):
-    """制带出片 → cv2 逐帧解码 → receiver.run.run_receive 还原，
+    """制片出片 → cv2 逐帧解码 → receiver.run.run_receive 还原，
     sha256 与源文件一致。直接喂解码帧（旁路稳定闸门——闸门要求每传输帧
     连续重复 ≥2 次，与带「每帧恰一次」的形态冲突，适配另立 issue 跟踪）。"""
     src = tmp_path / "报告 测试#1.bin"
@@ -233,8 +233,8 @@ def test_make_roundtrip_larger_file_fec_and_rounds(tmp_path):
 
 @needs_ffmpeg
 def test_make_roundtrip_via_receiver_video_source(tmp_path):
-    """§11.4.1 完整链路（issue #39）：tapemaker 制带 → receiver video 源
-    （带模式旁路稳定闸门，issue #45）→ run_receive 还原，sha256 一致。"""
+    """§11.4.1 完整链路（issue #39）：tapemaker 制片 → receiver video 源
+    （片模式旁路稳定闸门，issue #45）→ run_receive 还原，sha256 一致。"""
     from receiver.sources.video import iter_video
 
     src = tmp_path / "链路验证.bin"
@@ -291,7 +291,7 @@ def test_calibrate_matrix_reports_survival_and_recommends(tmp_path, capsys):
     # N/fps 回填 make（issue #40 spec：BIT 下限、N、fps、I 帧策略四项齐备）
     assert payload["recommended"]["rounds"] == 2
     assert payload["recommended"]["fps"] == 30
-    assert (out_dir / "1080p_bit8_gop_crf18.mp4").is_file(), "各组合样带应落盘备查"
+    assert (out_dir / "1080p_bit8_gop_crf18.mp4").is_file(), "各组合样片应落盘备查"
 
 
 @needs_ffmpeg

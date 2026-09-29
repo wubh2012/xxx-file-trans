@@ -52,9 +52,9 @@ class TapeWriter:
     ffmpeg 用系统安装版本，缺失时报错并提示安装方式（需求 §11.2）。
     编码默认全 I 帧（gop=1）依据 ADR-0003 决策 1；gop 可显式给定为
     「每个重复单元一 I 帧」的折中档（ADR-0003 备选 3，calibrate 扫参用）。
-    CRF 默认取低值——黑白方块内容熵极低，体积代价可接受，制带侧宁多花
+    CRF 默认取低值——黑白方块内容熵极低，体积代价可接受，制片侧宁多花
     码率保角标边缘锐利（平台二压才是主要损失源）；calibrate 模拟二压时
-    以更高 CRF 重编码近似，不改动制带侧默认。
+    以更高 CRF 重编码近似，不改动制片侧默认。
     """
 
     def __init__(self, out_path, geo: Geometry, fps: int, *,
@@ -62,7 +62,7 @@ class TapeWriter:
         exe = shutil.which("ffmpeg")
         if not exe:
             raise RuntimeError(
-                "未找到 ffmpeg：制带依赖系统安装的 ffmpeg。"
+                "未找到 ffmpeg：制片依赖系统安装的 ffmpeg。"
                 "Windows 可 winget install Gyan.FFmpeg，或从 https://ffmpeg.org/download.html 安装后重试"
             )
         cmd = [

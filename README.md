@@ -14,7 +14,7 @@
   .venv/Scripts/python.exe -m receiver receive --source video --video tape.mp4
   ```
 
-- **视频信道（制带）**：无屏幕、无摄像头——`tapemaker/` 把文件制成方块帧 MP4（带），人工上传视频平台、下载后用接收端 `--source video` 识别还原。编码策略见 `docs/adr/0003`（全 I 帧 + 轮次重复）。
+- **视频信道（制片）**：无屏幕、无摄像头——`tapemaker/` 把文件制成方块帧 MP4（片），人工上传视频平台、下载后用接收端 `--source video --tape` 识别还原。编码策略见 `docs/adr/0003`（全 I 帧 + 轮次重复）；使用说明见 `docs/tapemaker.md`。
 
   ```powershell
   .venv/Scripts/python.exe -m tapemaker make <文件> -o out.mp4 [--fps N] [--bit N] [--pad N] [--rounds N] [--resolution 1080p|4k]

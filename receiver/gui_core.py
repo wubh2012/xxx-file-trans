@@ -57,7 +57,7 @@ def build_command(source: str, *, frames_dir=None, video=None, region=None,
     if source == "video":
         cmd = f'{COMMAND_PREFIX} --source video --video "{video}"'
         if tape:
-            cmd += " --tape"   # 带模式（issue #45）：制带 MP4 旁路稳定闸门
+            cmd += " --tape"   # 片模式（issue #45）：制片 MP4 旁路稳定闸门
         return cmd
     raise ValueError(f"未知源 {source}")
 

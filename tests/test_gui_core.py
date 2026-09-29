@@ -339,7 +339,7 @@ class TestTkinterShellSmoke:
         assert calls == []
 
 
-# ---------- video 源带模式（issue #45） ----------
+# ---------- video 源片模式（issue #45） ----------
 
 class TestVideoTapeMode:
     def test_build_command_tape_appends_flag(self):

@@ -8,9 +8,9 @@
 时间戳注入确定性时钟（stable.py 约定）：now = 帧序号 / 录制帧率，
 闸门的超时窗随视频播放时间推进，与离线解码快慢无关。
 
-带模式（tape=True，issue #45）：旁路稳定闸门逐帧直读。制带 MP4
+片模式（tape=True，issue #45）：旁路稳定闸门逐帧直读。制片 MP4
 （tapemaker，ADR-0003）每个传输帧恰出现一次，相邻帧内容全部不同，
-「稳定两帧」判定永不满足、只能靠超时兜底放行——闸门的三个判定对带
+「稳定两帧」判定永不满足、只能靠超时兜底放行——闸门的三个判定对片
 均无对象（无过渡画面；重复帧由接收端帧号幂等落盘吸收；噪点帧由 CRC
 整帧丢弃兜底）。
 """
@@ -27,7 +27,7 @@ _DEFAULT_FPS = 30.0  # 容器缺失帧率元数据时的兜底
 
 def iter_video(video, *, tape: bool = False) -> Iterator[tuple[str, np.ndarray]]:
     """video 源迭代器：逐帧解码预录视频；默认经稳定闸门过滤后放行，
-    tape=True（带模式）逐帧直读（issue #45）。"""
+    tape=True（片模式）逐帧直读（issue #45）。"""
     gate = None if tape else StableFrameGate()
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():

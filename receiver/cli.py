@@ -88,7 +88,7 @@ def _add_source_args(p) -> None:
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
     p.add_argument("--tape", action="store_true",
-                   help="video 源带模式（issue #45）：制带 MP4（tapemaker 出片）每传输帧"
+                   help="video 源片模式（issue #45）：制片 MP4（tapemaker 出片）每传输帧"
                         "恰出现一次，旁路稳定闸门逐帧直读")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
     p.add_argument("--capture", choices=["auto", "mss", "dxgi"], default="auto",
