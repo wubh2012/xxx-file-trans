@@ -25,15 +25,8 @@ import cv2
 
 from receiver.pipeline import FrameRejected, GeometryCache, decode_frame
 from receiver.protocol import startup_self_check
-from tapemaker.frames import (
-    DEFAULT_BIT,
-    RESOLUTIONS,
-    Frame,
-    Geometry,
-    build_round,
-    derive_geometry,
-)
-from tapemaker.render import TapeWriter, render_frame
+from tapemaker.frames import DEFAULT_BIT, RESOLUTIONS, build_round, derive_geometry
+from tapemaker.make import make_tape, write_tape
 
 MAKE_CRF = 12  # 制片侧码率档：低 CRF 保角标边缘锐利，二压才是主要损失源
 
@@ -99,36 +92,27 @@ def _write_tape(out_path: Path, frames: list[Frame], geo: Geometry, fps: int,
 
 
 def cmd_make(args: argparse.Namespace) -> int:
-    startup_self_check()  # §3 冻结：两端实现启动自检，不过则拒绝运行
-
     src: Path = args.file
-    if not src.is_file():
-        raise SystemExit(f"源文件不存在：{src}")
-    bit = args.bit if args.bit is not None else DEFAULT_BIT[args.resolution]
-    canvas_w, canvas_h = RESOLUTIONS[args.resolution]
-    try:
-        geo = derive_geometry(canvas_w, canvas_h, bit, args.pad)
-    except ValueError as e:
-        raise SystemExit(f"几何参数错误：{e}")
-
     t0 = time.monotonic()
-    plain = src.read_bytes()
-    file_id = zlib.crc32(plain) & 0xFFFFFFFF  # fileId（纯内容 CRC32，§3）
-    payload = gzip.compress(plain)
-    frames = build_round(payload, file_id, src.name, len(plain), geo)
-
-    total_video_frames = len(frames) * args.rounds
+    try:
+        summary = make_tape(src, args.output, fps=args.fps, bit=args.bit,
+                            pad=args.pad, rounds=args.rounds,
+                            resolution=args.resolution)
+    except ValueError as e:  # 源文件 / 几何校验失败
+        raise SystemExit(str(e)) from e
+    geo = summary["geo"]
+    total_video_frames = summary["frame_count"] * args.rounds
     print(
-        f"制片：{len(plain)} 字节 → gzip {len(payload)} 字节，fileId 0x{file_id:08X}\n"
+        f"制片：{summary['plain_size']} 字节 → gzip {summary['payload_size']} 字节，"
+        f"fileId 0x{summary['file_id']:08X}\n"
         f"几何 {geo.canvas_w}×{geo.canvas_h} · COLS {geo.cols} × ROWS {geo.rows} · "
         f"BIT {geo.bit} · PAD {geo.pad} · CHUNK {geo.chunk_size} B\n"
-        f"{len(frames)} 帧/轮 × {args.rounds} 轮 = {total_video_frames} 帧 · "
-        f"{args.fps} fps · 时长 {total_video_frames / args.fps:.1f}s"
+        f"{summary['frame_count']} 帧/轮 × {args.rounds} 轮 = {total_video_frames} 帧 · "
+        f"{args.fps} fps · 时长 {summary['duration']:.1f}s"
     )
-    _write_tape(args.output, frames, geo, args.fps, args.rounds)
-    out_size = args.output.stat().st_size
     print(
-        f"已出片：{args.output}（{out_size} 字节，{time.monotonic() - t0:.1f}s）\n"
+        f"已出片：{summary['output']}（{summary['out_size']} 字节，"
+        f"{time.monotonic() - t0:.1f}s）\n"
         f"接收：上传视频平台后下载，python -m receiver receive --source video --video <下载文件> --tape"
     )
     return 0
@@ -228,7 +212,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
                 tag = _combo_tag(resolution, bit, strategy)
                 master = out_dir / f"{tag}.mp4"
                 t0 = time.monotonic()
-                _write_tape(master, frames, geo, args.fps, args.rounds, gop=gop)
+                write_tape(master, frames, geo, args.fps, args.rounds, gop=gop)
                 for crf in args.crf:
                     reenc = out_dir / f"{tag}_crf{crf}.mp4"
                     _reencode(master, reenc, crf)
