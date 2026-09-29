@@ -14,3 +14,4 @@ benchmark/results/work/
 build/
 dist/
 receiver_gui.spec
+retest*/
