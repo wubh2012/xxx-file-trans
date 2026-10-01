@@ -1,0 +1,2 @@
+﻿fps,rep,size_mib,cycle_s,wall_s,elapsed_s,received,total,rejected,queue_produced,queue_dropped,sha_ok,failed
+20,0,3.402,74.2,86.439,86.192,1468,1468,3,1576,0,True,False

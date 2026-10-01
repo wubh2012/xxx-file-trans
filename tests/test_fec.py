@@ -36,7 +36,8 @@ def _parity(parts: list[bytes], parity_index: int, chunk: int) -> bytes:
     return bytes(out)
 
 
-def _store_with_missing(missing: set[int], *, parity_first: bool = False) -> tuple[FrameStore, bytes, int]:
+def _store_with_missing(missing: set[int], *, parity_first: bool = False,
+                        parity_indices=(0, 1)) -> tuple[FrameStore, bytes, int]:
     plain = random.Random(42).randbytes(5000)
     compressed = gzip.compress(plain)
     chunk = 128
@@ -53,7 +54,7 @@ def _store_with_missing(missing: set[int], *, parity_first: bool = False) -> tup
     # 只测第一组，缺失帧全部安排在同组内。
     group = parts[:min(FEC_GROUP_SIZE, total)]
     def add_parity():
-        for parity in range(FEC_PARITY_FRAMES):
+        for parity in parity_indices:
             parity_no = total + parity
             store.add(DecodedFrame(
                 header=_header(file_id, parity_no, total, chunk, FLAGS_GZIP | FLAGS_FEC),
@@ -85,3 +86,17 @@ def test_data_arriving_after_parity_still_triggers_recovery():
     store, plain, _total = _store_with_missing({3, 17}, parity_first=True)
     assert store.data_complete()
     assert gzip.decompress(store.assemble()) == plain
+
+
+def test_single_missing_recovered_with_only_weighted_parity():
+    for missing in (0, 3, 17, 31):
+        for parity_first in (False, True):
+            store, plain, _ = _store_with_missing({missing}, parity_first=parity_first,
+                                                 parity_indices=(1,))
+            assert store.data_complete()
+            assert gzip.decompress(store.assemble()) == plain
+
+
+def test_two_missing_with_only_weighted_parity_remain_incomplete():
+    store, _, _ = _store_with_missing({3, 17}, parity_indices=(1,))
+    assert not store.data_complete()

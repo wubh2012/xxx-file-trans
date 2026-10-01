@@ -24,6 +24,7 @@ now 由调用方传单调时钟时间戳（time.monotonic()），闸门自身不
 
 import time
 
+import cv2
 import numpy as np
 
 
@@ -45,11 +46,23 @@ class StableFrameGate:
         self._candidate: np.ndarray | None = None  # 未稳定候选画面
         self._candidate_hits = 0  # 候选连续一致的捕获次数
         self._anchor: float | None = None  # 最近一次放行的时刻（超时窗起点）
+        self._diff: np.ndarray | None = None
+        self._diff_mask: np.ndarray | None = None
 
     def _same(self, a: np.ndarray, b: np.ndarray) -> bool:
         """帧一致判定：形状相同 + 超 tol 像素占比 ≤ frac_max。"""
         if a.shape != b.shape:
             return False
+        if a.ndim == 2 and a.size and a.dtype == b.dtype == np.uint8:
+            # 取帧源输出 uint8 灰度图。absdiff 避免无符号减法回绕，
+            # 复用缓冲区，省去每次两幅 int16 转换及全图中间数组。
+            # 仍逐像素精确比较，保留原有噪点占比和容差边界。
+            if self._diff is None or self._diff.shape != a.shape:
+                self._diff = np.empty(a.shape, dtype=np.uint8)
+                self._diff_mask = np.empty(a.shape, dtype=bool)
+            cv2.absdiff(a, b, dst=self._diff)
+            np.greater(self._diff, self.tol, out=self._diff_mask)
+            return bool(np.count_nonzero(self._diff_mask) / a.size <= self.frac_max)
         diff = np.abs(a.astype(np.int16) - b.astype(np.int16))
         return bool((diff > self.tol).mean() <= self.frac_max)
 

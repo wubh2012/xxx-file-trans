@@ -15,6 +15,7 @@ PAD 不再由画布边沿推导（issue #22）：角标只锚定数据网格，�
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import NamedTuple
 
 import cv2
@@ -242,6 +243,19 @@ def bootstrap_geometry(bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int
     return geo, rect
 
 
+@lru_cache(maxsize=16)
+def _sample_indices(rows, cols, bit, rect, shape):
+    x0, y0, _, _ = rect
+    k = min(5, bit)
+    if k % 2 == 0:
+        k -= 1
+    half = k // 2
+    centers_y = (y0 + (np.arange(rows) + 0.5) * bit).astype(int)
+    centers_x = (x0 + (np.arange(cols) + 0.5) * bit).astype(int)
+    return (k, np.clip(centers_y - half, 0, shape[0] - k),
+            np.clip(centers_x - half, 0, shape[1] - k))
+
+
 def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, int, int]) -> bytes:
     """按 BIT 网格采样：格心 k×k 邻域（k = min(5, BIT) 取奇）均值 < 128 = 暗多数 = 1。
 
@@ -251,17 +265,8 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
     gather（O(格心×k²)），不再对整图做 boxFilter（O(像素)）；窗口起点钳制
     到图像边界，与原 BORDER_REPLICATE 等价。
     """
-    x0, y0, _, _ = rect
-    k = min(5, geo.bit)
-    if k % 2 == 0:
-        k -= 1
-    half = k // 2
-    img_h, img_w = bw.shape
-    centers_y = (y0 + (np.arange(geo.rows) + 0.5) * geo.bit).astype(int)
-    centers_x = (x0 + (np.arange(geo.cols) + 0.5) * geo.bit).astype(int)
+    k, rows_sel, cols_sel = _sample_indices(geo.rows, geo.cols, geo.bit, rect, bw.shape)
     win = np.lib.stride_tricks.sliding_window_view(bw, (k, k))  # (H-k+1, W-k+1, k, k) 视图
-    rows_sel = np.clip(centers_y - half, 0, img_h - k)
-    cols_sel = np.clip(centers_x - half, 0, img_w - k)
     window = win[rows_sel[:, None], cols_sel[None, :]]  # → (rows, cols, k, k)
     mean = window.mean(axis=(2, 3))  # 白色占比（0–255）
     bits = (mean < 128).astype(np.uint8)  # 暗多数 = 黑块 = 1
@@ -272,20 +277,23 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
 class GeometryCache:
     """角标检测缓存（issue #30 C1）：帧间几何不变时跳过全量连通域检测。
 
-    connectedComponentsWithStats 是 O(像素)，但播放期间几何不变。首帧全量
-    检测后缓存 (geo, rect)，后续帧只做轻量校验：缓存网格矩形外推出的四个
+    connectedComponentsWithStats 是 O(像素)，但播放期间几何不变。首帧完整
+    校验后缓存 (geo, rect)，后续帧优先用固定阈值和缓存坐标解码，完整帧头
+    与 CRC 失败才回退全量路径。回退时检查缓存网格矩形外推出的四个
     角标框（角标内角 = 网格外角，见 measure_geometry）仍为实心白方块
-    （O(side²)）。校验失败（角标被破坏 / 画面尺寸变化 / 裁切偏移漂移）回退
+    （O(side²)）。校验失败（画面尺寸变化 / 裁切偏移漂移）回退
     全量检测并刷新缓存；误命中由帧头交叉校验 + CRC 兜底（整帧拒绝）。
     """
 
     _shape: tuple[int, int] | None = None
     _geo: MeasuredGeometry | None = None
     _rect: tuple[int, int, int, int] | None = None
+    _validated: bool = False
 
     def measure(self, bw: np.ndarray) -> tuple[MeasuredGeometry, tuple[int, int, int, int]]:
         """带缓存的几何测量：命中轻量校验直接复用，否则全量检测（含冻结校验）。"""
         if self._geo is None or bw.shape != self._shape or not self._corners_intact(bw):
+            self._validated = False
             self._shape = bw.shape
             self._geo, self._rect = bootstrap_geometry(bw)
         return self._geo, self._rect
@@ -316,12 +324,29 @@ def decode_frame(img: np.ndarray, geo_cache: GeometryCache | None = None) -> Dec
     """
     if img.ndim != 2:
         raise FrameRejected("geometry", "画面不是单通道灰度图")
+    if (geo_cache is not None and geo_cache._validated
+            and img.shape == geo_cache._shape):
+        # 几何来自此前成功识别的画面；清晰桌面先用固定阈值快速采样。
+        # 角标局部遮挡也可尝试缓存坐标，但必须完整通过帧头及 CRC。
+        # 位移、灰度退化或数据遮挡导致失败时，再走 Otsu + 几何自举。
+        _, quick = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+        try:
+            return _decode_grid(quick, geo_cache._geo, geo_cache._rect)
+        except FrameRejected:
+            pass
     _, bw = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
     if geo_cache is not None:
         geo, rect = geo_cache.measure(bw)
     else:
         geo, rect = bootstrap_geometry(bw)
+    frame = _decode_grid(bw, geo, rect)
+    if geo_cache is not None:
+        geo_cache._validated = True
+    return frame
+
+
+def _decode_grid(bw, geo, rect):
     grid_bytes = _sample_grid(bw, geo, rect)
     if len(grid_bytes) < HEADER_BYTES:
         raise FrameRejected("geometry", f"网格容量 {len(grid_bytes)} 字节装不下帧头")

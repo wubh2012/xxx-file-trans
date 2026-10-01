@@ -75,6 +75,28 @@ v1 的 FPS 只是信道模型折算参数，测不出抓屏丢帧。`run_bench_l
   --fps-list 15,20,30 --reps 1 --calib-cycles 1
 ```
 
+需要定位尾部停顿时，在相同命令上加 `--trace`。每次正式接收会在
+`benchmark/results/work/traces/` 写一份 JSONL：逐帧编号与新/重复状态、帧间
+间隔、解码/落盘耗时；90/95/99/100% 检查点的缺帧号；采集队列空等心跳；以及
+拼接、gunzip 校验、输出写盘、SHA-256 和进度清理各阶段耗时。日志不记录帧图或
+文件内容，路径会打印在控制台并写入结果 JSON 的 `trace` 字段。
+预计单轮耗时很长时可再加 `--skip-calibration`，避免校准先额外播放完整周期。
+若发送端浏览器被桌面上的其他窗口遮挡，可加 `--focus-grace-seconds 15`，在抓屏
+自检前留出时间把发送端窗口置前。
+
+接收默认允许最多 12 个名义播放周期（`--receive-timeout-cycles` 可调），以覆盖
+738 秒这类长尾复现；周期估算包含数据帧、每 100 帧元数据、FEC 帧和末帧 1 秒停留。
+
+日志可用内置分析器汇总：
+
+```powershell
+.venv/Scripts/python.exe benchmark/analyze_receive_trace.py `
+  "benchmark/results/work/traces/receive_dxgi_20_0_YYYYMMDDTHHMMSS.jsonl"
+```
+
+分析器输出重复播放、尾部缺帧、采集空等、解码/存储时延，以及还原各阶段耗时，
+用于区分“接收端还在等缺帧”与“收齐后解压/写盘慢”。
+
 结果写入 `live_desktop_results_dxgi_output.json/.csv`，其中 `sha_ok=true` 是
 端到端通过的硬条件；`wall_s` 才是用户实际等待时间，`measuredFps` 和
 `missingRate` 用于判断丢帧/重播造成的额外成本。运行时浏览器窗口必须保持

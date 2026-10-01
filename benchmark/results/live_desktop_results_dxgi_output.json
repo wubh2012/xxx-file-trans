@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "generated_at": "2026-10-01T08:32:46.977759+00:00",
+    "mode": "live-desktop",
+    "capture": "dxgi",
+    "input": "C:\\Users\\GMKMIX\\AppData\\Local\\Temp\\codex-clipboard-7cbf4899-3b16-48e5-babd-59d9bd040d0a.jpg",
+    "input_bytes": 3567634,
+    "input_sha256": "84bd755492ce6a23b349cc8127dd44322e84cba25480d288b78f1b61580b8d74",
+    "fps_list": [
+      20
+    ],
+    "size_mib": 3.402,
+    "reps": 1,
+    "calib_cycles": 1,
+    "bit_css": 6,
+    "pad": 3,
+    "window": [
+      1536,
+      816
+    ],
+    "window_pos": [
+      0,
+      0
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）"
+  },
+  "calibrations": [],
+  "runs": [
+    {
+      "fps": 20,
+      "geo": {
+        "fps": 20,
+        "bit": 8,
+        "cols": 216,
+        "rows": 91,
+        "chunk": 2431,
+        "total": 1468
+      },
+      "cycle_s": 74.2,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 80,
+        "width": 1920,
+        "height": 976
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 20,
+          "size_mib": 3.402,
+          "failed": false,
+          "wall_s": 86.439,
+          "elapsed_s": 86.192,
+          "received": 1468,
+          "total": 1468,
+          "rejected": 3,
+          "queue_produced": 1576,
+          "queue_dropped": 0,
+          "sha_ok": true,
+          "error": null,
+          "trace": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\traces\\receive_dxgi_20_0_20261001T083119.jsonl"
+        }
+      ]
+    }
+  ]
+}

@@ -14,6 +14,7 @@ stop_check 为协作式停止缝——逐帧检查，置真即停，已收帧照
 import hashlib
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,10 +66,11 @@ class PrefetchedFrames:
 
     _END = object()
 
-    def __init__(self, frames, *, maxsize: int = 2):
+    def __init__(self, frames, *, maxsize: int = 2, on_idle=None):
         if maxsize < 1:
             raise ValueError("maxsize 必须 ≥ 1")
         self._frames = frames
+        self._on_idle = on_idle
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -125,7 +127,15 @@ class PrefetchedFrames:
         return self
 
     def __next__(self):
-        item = self._queue.get()
+        if self._on_idle is None:
+            item = self._queue.get()
+        else:
+            while True:
+                try:
+                    item = self._queue.get(timeout=1.0)
+                    break
+                except queue.Empty:
+                    self._on_idle(self.stats, self._queue.qsize())
         if item is self._END:
             if self.error is not None:
                 raise self.error
@@ -148,7 +158,7 @@ class PrefetchedFrames:
 
 def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                 notify=None, stop_check=None, *, prefetch: bool = False,
-                prefetch_size: int = 2) -> ReceiveResult:
+                prefetch_size: int = 2, trace=None) -> ReceiveResult:
     """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器。
 
     reporter_factory 返回 ProgressReporter 同接口对象（上下文管理器 +
@@ -156,9 +166,31 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
     stop_check 非 None 时逐帧调用，返回真即协作式停止。
     prefetch 为真时启用 C3 有界生产者/消费者队列，适用于实时 desktop
     源；prefetch_size 为队列容量，默认只保留少量最新候选帧。
+    trace 非 None 时收到结构化诊断事件；默认关闭，不影响常规接收。
     """
+    run_started = time.perf_counter()
+    trace_failed = False
+
+    def emit(event: str, **fields) -> None:
+        nonlocal trace_failed
+        if trace is None or trace_failed:
+            return
+        try:
+            trace({"event": event,
+                   "t_rel_s": round(time.perf_counter() - run_started, 6),
+                   **fields})
+        except Exception:
+            # Diagnostics must not turn a successful receive into a failure.
+            trace_failed = True
+
     out_dir = Path(out_dir)
-    prefetched = PrefetchedFrames(frames, maxsize=prefetch_size) if prefetch else None
+    def on_stream_idle(stats, queue_depth):
+        emit("stream_idle", produced=stats.produced, enqueued=stats.enqueued,
+             dropped=stats.dropped, queue_depth=queue_depth)
+
+    prefetched = (PrefetchedFrames(frames, maxsize=prefetch_size,
+                                   on_idle=on_stream_idle if trace is not None else None)
+                  if prefetch else None)
     stream = prefetched if prefetched is not None else frames
     if prefetched is not None:
         prefetched.start()
@@ -166,9 +198,13 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
     timer = RestoreTimer()  # 还原计时（issue #25）：锚点 = 首个 is_new 数据帧落地
+    emit("receive_start", prefetch=prefetch, prefetch_size=prefetch_size)
 
     def fail(msg: str | None, *, stopped: bool = False) -> ReceiveResult:
         """统一未完成出口：失败原因 + 未完成统计（issue #25），退出码 1。"""
+        emit("receive_incomplete", stopped=stopped, error=msg,
+             received=store.received_count(), total=store.total_frames,
+             missing_frame_numbers=store.missing_frame_numbers(limit=32))
         result = ReceiveResult(
             code=1, stopped=stopped, error=msg,
             received=store.received_count(), total=store.total_frames,
@@ -183,30 +219,77 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
 
     stopped = False
     geo_cache = GeometryCache()  # 角标检测缓存（issue #30 C1）：会话内帧间几何不变
+    last_candidate_at = None
+    last_progress_pulse = run_started
+    last_progress_label = None
     try:
         with reporter_factory() as reporter:
             try:
                 for name, img in stream:
+                    candidate_at = time.perf_counter()
+                    gap_ms = (None if last_candidate_at is None else
+                              round((candidate_at - last_candidate_at) * 1000, 3))
+                    last_candidate_at = candidate_at
                     if stop_check is not None and stop_check():
                         stopped = True
                         break
+                    stage_started = time.perf_counter()
                     try:
                         frame: DecodedFrame = decode_frame(img, geo_cache)
                     except FrameRejected as e:
+                        emit("frame_rejected", stage="decode", reason=e.reason,
+                             detail=e.detail, gap_ms=gap_ms,
+                             duration_ms=round((time.perf_counter() - stage_started) * 1000, 3),
+                             received=store.received_count(), total=store.total_frames)
                         reporter.on_rejected(name, e)
                         continue
+                    decode_ms = round((time.perf_counter() - stage_started) * 1000, 3)
+                    stage_started = time.perf_counter()
                     try:
                         is_new = store.add(frame)
                     except FrameRejected as e:
                         # 跨任务混帧 / 参数锁定硬锁（param_lock）同样整帧拒绝
+                        emit("frame_rejected", stage="store", frame_no=frame.header.frame_no,
+                             reason=e.reason, detail=e.detail, gap_ms=gap_ms,
+                             decode_ms=decode_ms,
+                             duration_ms=round((time.perf_counter() - stage_started) * 1000, 3),
+                             received=store.received_count(), total=store.total_frames)
                         reporter.on_rejected(name, e)
                         continue
+                    store_ms = round((time.perf_counter() - stage_started) * 1000, 3)
                     if is_new:
                         timer.start()  # 与参数锁定同点起算，首帧前时间不计入
                     reporter.on_decoded(frame.payload, is_new)
                     if store.total_frames is not None:
                         reporter.set_total(store.total_frames,
                                            completed=store.received_count())
+                    received = store.received_count()
+                    total = store.total_frames
+                    percent = None if total is None else 100 * received / total
+                    progress_label = (None if percent is None else
+                                      "100%" if received == total else
+                                      f"{int(percent)}%")
+                    frame_kind = ("metadata" if frame.header.frame_no == 0xFFFFFF else
+                                  "fec" if frame.header.frame_no >= frame.header.total_frames else
+                                  "data")
+                    emit("frame", frame_no=frame.header.frame_no,
+                         frame_kind=frame_kind, is_new=is_new,
+                         received=received, total=total, percent=percent,
+                         gap_ms=gap_ms, decode_ms=decode_ms, store_ms=store_ms)
+                    if (is_new and progress_label in {"90%", "95%", "99%", "100%"}
+                            and progress_label != last_progress_label):
+                        emit("progress_milestone", label=progress_label,
+                             received=received, total=total,
+                             missing_count=total - received,
+                             missing_frame_numbers=store.missing_frame_numbers(limit=32))
+                        last_progress_label = progress_label
+                        last_progress_pulse = time.perf_counter()
+                    elif (not is_new and percent is not None and percent >= 98.5
+                          and time.perf_counter() - last_progress_pulse >= 5.0):
+                        emit("progress_stall", received=received, total=total,
+                             percent=percent, missing_count=total - received,
+                             missing_frame_numbers=store.missing_frame_numbers(limit=32))
+                        last_progress_pulse = time.perf_counter()
                     if store.is_complete():
                         # 收齐判据满足即提前退出进入还原（F13/验收标准 2，
                         # issue #19）：desktop 等无限源不等流耗尽。元数据
@@ -226,25 +309,57 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
 
     if store.is_complete():
         try:
-            plain = gunzip_verify(store.assemble())
+            emit("restore_stage_start", stage="assemble")
+            stage_started = time.perf_counter()
+            assembled = store.assemble()
+            emit("restore_stage", stage="assemble", duration_ms=round(
+                (time.perf_counter() - stage_started) * 1000, 3),
+                compressed_bytes=len(assembled))
+            emit("restore_stage_start", stage="gunzip_verify",
+                 compressed_bytes=len(assembled))
+            stage_started = time.perf_counter()
+            plain = gunzip_verify(assembled)
+            emit("restore_stage", stage="gunzip_verify", duration_ms=round(
+                (time.perf_counter() - stage_started) * 1000, 3),
+                plain_bytes=len(plain))
         except (IncompleteError, RestoreError) as e:
+            emit("restore_error", stage="assemble_or_gunzip", error=str(e))
             return fail(f"还原失败：{e}")
         if len(plain) != store.metadata.plain_size:
             return fail(
                 f"还原失败：plainSize 不一致（元数据声明 {store.metadata.plain_size}，"
                 f"实际解压 {len(plain)}）"
             )
+        emit("restore_stage_start", stage="mkdir_output")
+        stage_started = time.perf_counter()
         out_dir.mkdir(parents=True, exist_ok=True)
+        emit("restore_stage", stage="mkdir_output", duration_ms=round(
+            (time.perf_counter() - stage_started) * 1000, 3))
+        emit("restore_stage_start", stage="resolve_destination")
+        stage_started = time.perf_counter()
         try:
             dest = safe_dest(out_dir, sanitize_filename(store.metadata.name))
         except ValueError as e:
+            emit("restore_error", stage="destination", error=str(e))
             return fail(f"还原失败：{e}")
+        emit("restore_stage", stage="resolve_destination", duration_ms=round(
+            (time.perf_counter() - stage_started) * 1000, 3))
+        emit("restore_stage_start", stage="write_output", plain_bytes=len(plain))
+        stage_started = time.perf_counter()
         dest.write_bytes(plain)
+        emit("restore_stage", stage="write_output", duration_ms=round(
+            (time.perf_counter() - stage_started) * 1000, 3),
+            plain_bytes=len(plain))
         elapsed = timer.elapsed  # 耗时口径到写盘完成止（sha256 不计入）
+        emit("restore_stage_start", stage="sha256", plain_bytes=len(plain))
+        stage_started = time.perf_counter()
+        sha256 = hashlib.sha256(plain).hexdigest()
+        emit("restore_stage", stage="sha256", duration_ms=round(
+            (time.perf_counter() - stage_started) * 1000, 3))
         result = ReceiveResult(
             code=0, dest=dest, name=dest.name, plain_size=len(plain),
             elapsed=elapsed, received=store.received_count(),
-            total=store.total_frames, sha256=hashlib.sha256(plain).hexdigest(),
+            total=store.total_frames, sha256=sha256,
         )
         result.warnings.extend(store.warnings)  # meta 落盘降级告警（issue #43）
         if prefetched is not None:
@@ -253,15 +368,26 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
         # payload 清理（issue #12）：还原成功后任务目录不再有续传价值，删除残留；
         # 失败仅告警，不推翻已成功的还原
         try:
+            emit("restore_stage_start", stage="cleanup_progress")
+            stage_started = time.perf_counter()
             store.cleanup_task()
+            emit("restore_stage", stage="cleanup_progress", duration_ms=round(
+                (time.perf_counter() - stage_started) * 1000, 3))
         except OSError as e:
             result.warnings.append(f"告警：任务 payload 清理失败（{e}），可手动删除任务目录")
         # 完成通知（issue #12）：通知发送失败只告警；文本用友好大小（issue #25）
         if notify is not None:
             try:
+                emit("restore_stage_start", stage="notify")
+                stage_started = time.perf_counter()
                 notify("文件摆渡还原完成", f"{dest.name}（{friendly_size(len(plain))}）已还原到 {dest.parent}")
+                emit("restore_stage", stage="notify", duration_ms=round(
+                    (time.perf_counter() - stage_started) * 1000, 3))
             except Exception as e:
                 result.warnings.append(f"告警：完成通知发送失败（{e}）")
+        emit("receive_done", code=0, received=result.received, total=result.total,
+             receive_elapsed_s=result.elapsed, queue_produced=result.queue_produced,
+             queue_dropped=result.queue_dropped)
         return result
 
     if store.data_complete():

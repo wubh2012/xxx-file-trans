@@ -119,6 +119,43 @@ def test_dxgi_uses_threaded_capture_mode(fake_dxcam):
     assert fake.camera is not None and fake.camera.start_calls == 1
 
 
+def test_threaded_capture_does_not_stabilize_short_lived_buffer_snapshot(monkeypatch):
+    """线程缓冲区读取过快时，同一过渡快照不能被立即读两次并放行。"""
+    clock = [0.0]
+    rng = np.random.default_rng(42)
+    a, partial, b = [rng.integers(0, 256, (16, 16), dtype=np.uint8)
+                     for _ in range(3)]
+
+    class BufferedCamera(FakeCamera):
+        def grab(self, new_frame_only=True):
+            clock[0] += 0.0003  # 非阻塞环形缓冲区读取
+            img = a if clock[0] < 0.030 else partial if clock[0] < 0.034 else b
+            return _gray3d(img)
+
+        @property
+        def latest_frame_ticks(self):
+            return int(clock[0] * 120)
+
+    camera = BufferedCamera([])
+
+    class BufferedDXCam:
+        @staticmethod
+        def create(**kwargs):
+            return camera
+
+    monkeypatch.setitem(sys.modules, "dxcam", BufferedDXCam())
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    capture = _dxgi_capture(None)
+    try:
+        emitted = [img for _, img in iter_desktop(capture=islice(capture, 150))]
+    finally:
+        capture.close()
+    assert len(emitted) == 2, "4ms 过渡快照不应被快速重复读取判为稳定画面"
+    assert np.array_equal(emitted[0], a)
+    assert np.array_equal(emitted[1], b)
+
+
 def test_no_update_repeats_last_frame(tmp_path, fake_dxcam):
     """静屏（grab None）重发上一帧——稳定闸门两帧一致判定依赖的重复捕获语义。"""
     a = np.full((8, 8, 1), 10, dtype=np.uint8)

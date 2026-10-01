@@ -17,7 +17,8 @@ from receiver.pick import pick_region
 from receiver.protocol import startup_self_check
 from receiver.run import run_receive
 from receiver.sources import iter_source
-from receiver.sources.desktop import format_region, iter_desktop, parse_region
+from receiver.sources.desktop import (format_region, iter_desktop, parse_region,
+                                      resolve_capture_backend)
 from receiver.sources.video import iter_video
 from receiver.summary import restore_summary
 
@@ -124,7 +125,10 @@ def _frames_or_error(parser, args):
             parser.error("--source images 需要 --dir <PNG 帧序列目录>")
         return iter_source("images", args.dir)
     if args.source == "desktop":
-        return iter_desktop(region=_desktop_region(parser, args), backend=args.capture)
+        region = _desktop_region(parser, args)
+        backend = resolve_capture_backend(args.capture)
+        print(f"桌面抓屏后端：{backend}", file=sys.stderr, flush=True)
+        return iter_desktop(region=region, backend=backend)
     # video（#10）：缺参用法错误；打不开的报错见调用方
     if not args.video:
         parser.error("--source video 需要 --video <录制视频文件>")

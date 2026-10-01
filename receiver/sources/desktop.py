@@ -36,6 +36,7 @@ DXGI_MAX_RECOVERY_CYCLES = 3
 DXGI_EMPTY_TIMEOUT_S = 5.0
 DXGI_FRAME_STALL_TIMEOUT_S = 5.0
 DXGI_SHUTDOWN_TIMEOUT_S = 0.5
+DXGI_CAPTURE_FPS = 120
 
 
 def _release_dxgi_camera(camera) -> None:
@@ -100,6 +101,19 @@ def parse_region(text: str) -> dict:
 def format_region(region: dict) -> str:
     """mss 区域 dict → `L,T,W,H`（--region 文本格式的逆，与 parse_region 同源）。"""
     return f"{region['left']},{region['top']},{region['width']},{region['height']}"
+
+
+def resolve_capture_backend(backend: str) -> str:
+    """将 auto 解析为当前进程实际可用的后端，供 CLI 显示和采集器共用。"""
+    if backend != "auto":
+        return backend
+    if sys.platform != "win32":
+        return "mss"
+    try:
+        import dxcam  # noqa: F401  Windows 上优先用 DXGI
+    except (ImportError, OSError, RuntimeError):
+        return "mss"
+    return "dxgi"
 
 
 def _ensure_dpi_awareness() -> None:
@@ -183,7 +197,7 @@ def _dxgi_capture(region: dict | None,
                     # camera.grab() 把接收主循环永久阻塞。
                     start = getattr(camera, "start", None)
                     if start is not None:
-                        start(target_fps=120, video_mode=True)
+                        start(target_fps=DXGI_CAPTURE_FPS, video_mode=True)
                         threaded_capture = True
                         has_frame_ticks = hasattr(camera, "latest_frame_ticks")
                     create_failures = 0
@@ -195,6 +209,7 @@ def _dxgi_capture(region: dict | None,
                         ) from None
                     time.sleep(0.2)  # 等系统过渡完成再重建
                     continue
+            poll_started = time.monotonic()
             try:
                 frame = camera.grab(new_frame_only=True)  # 静屏 None，~0.6ms
                 grab_failures = 0
@@ -240,6 +255,13 @@ def _dxgi_capture(region: dict | None,
                 recovery_cycles = 0
                 empty_since = None
                 yield frame.reshape(frame.shape[0], frame.shape[1])  # (H,W,1) → (H,W)
+                if threaded_capture:
+                    # start() 后 grab() 非阻塞读取最近的缓冲区快照，
+                    # new_frame_only 不限制重复读取。跟随采集线程节拍，
+                    # 避免比较优化后忙轮询，把同一过渡快照读两次误判稳定。
+                    remaining = 1 / DXGI_CAPTURE_FPS - (time.monotonic() - poll_started)
+                    if remaining > 0:
+                        time.sleep(remaining)
                 continue
             if empty_since is None:
                 empty_since = time.monotonic()
@@ -257,7 +279,8 @@ def _dxgi_capture(region: dict | None,
             _release_dxgi_camera(camera)
 
 
-def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto"):
+def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto",
+                 on_backend=None, on_ready=None):
     """desktop 源迭代器：capture 缺省按 backend 真实抓屏（auto / mss / dxgi），
     测试可注入图像序列。关闭时显式 close 内层采集生成器（释放抓屏资源，
     不依赖 GC 终结时机）。"""
@@ -267,26 +290,30 @@ def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto"
     # 走稳定两帧，高 FPS 则至少每个短窗口把最新候选交给 CRC 判定。
     gate = StableFrameGate(timeout_s=0.08)
     seq = 0
+    ready = False
     capture_backend = backend
     if capture is None:
-        if backend == "auto":
-            # DXGI 仅 Windows 可用；导入失败（未安装 dxcam / 非 Windows）
-            # 自动回退 mss，保持原有跨平台行为。
-            if sys.platform != "win32":
-                backend = "mss"
-            else:
-                try:
-                    import dxcam  # noqa: F401
-                except (ImportError, OSError, RuntimeError):
-                    backend = "mss"
-                else:
-                    backend = "dxgi"
+        backend = resolve_capture_backend(backend)
         capture = _dxgi_capture(region) if backend == "dxgi" else _mss_capture(region)
         capture_backend = backend
+        if on_backend is not None:
+            try:
+                on_backend(backend, "selected")
+            except Exception:  # noqa: BLE001 诊断回调不得影响抓屏
+                pass
     try:
         while True:
             try:
                 for gray in capture:
+                    if not ready:
+                        ready = True
+                        if on_ready is not None:
+                            on_ready()
+                        if on_backend is not None:
+                            try:
+                                on_backend(capture_backend, "ready")
+                            except Exception:
+                                pass
                     out = gate.feed(gray)
                     if out is not None:
                         seq += 1
@@ -300,7 +327,14 @@ def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto"
                 close = getattr(capture, "close", None)
                 if close is not None:
                     close()
+                print("DXGI 抓屏恢复失败，已回退到 MSS。", file=sys.stderr,
+                      flush=True)
                 capture_backend = "mss"
+                if on_backend is not None:
+                    try:
+                        on_backend("mss", "fallback")
+                    except Exception:  # noqa: BLE001 诊断回调不得影响抓屏
+                        pass
                 capture = _mss_capture(region)
     finally:
         close = getattr(capture, "close", None)

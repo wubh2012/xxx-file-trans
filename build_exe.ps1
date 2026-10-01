@@ -12,7 +12,11 @@ if ($LASTEXITCODE -ne 0) {
     .venv\Scripts\python.exe -m pip install pyinstaller
 }
 
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed `
-    --name receiver_gui receiver_gui.pyw
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed `
+    --name receiver_gui `
+    --hidden-import dxcam `
+    --hidden-import mss `
+    --hidden-import winotify `
+    receiver_gui.pyw
 
 Write-Host "`n产物：$(Resolve-Path dist\receiver_gui.exe)"

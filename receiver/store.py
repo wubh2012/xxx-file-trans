@@ -24,7 +24,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from receiver.metadata import FileMetadata
-from receiver.fec import recover_one, recover_two
+from receiver.fec import recover_one, recover_one_weighted, recover_two
 from receiver.pipeline import DecodedFrame, FrameHeader
 from receiver.protocol import (
     FEC_GROUP_SIZE,
@@ -259,13 +259,16 @@ class FrameStore:
         if not missing or len(missing) > FEC_PARITY_FRAMES:
             return
         parity0 = self._fec_parity.get((group, 0))
-        if parity0 is None:
-            return
+        parity1 = self._fec_parity.get((group, 1))
         if len(missing) == 1:
-            recovered = [recover_one(parity0, parts)]
+            if parity0 is not None:
+                recovered = [recover_one(parity0, parts)]
+            elif parity1 is not None:
+                recovered = [recover_one_weighted(parity1, parts, missing[0])]
+            else:
+                return
         else:
-            parity1 = self._fec_parity.get((group, 1))
-            if parity1 is None:
+            if parity0 is None or parity1 is None:
                 return
             first, second = recover_two(parity0, parity1, parts,
                                         (missing[0], missing[1]))
@@ -353,6 +356,12 @@ class FrameStore:
 
     def received_count(self) -> int:
         return len(self._frames)
+
+    def missing_frame_numbers(self, limit: int = 32) -> list[int]:
+        """返回当前缺失的数据帧号前缀，供尾部进度诊断使用。"""
+        if limit <= 0 or self.total_frames is None:
+            return []
+        return [n for n in range(self.total_frames) if n not in self._frames][:limit]
 
     def data_complete(self) -> bool:
         """数据帧收齐判据：帧号 0..total-1 全部在册。"""

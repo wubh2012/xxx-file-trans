@@ -33,7 +33,6 @@ desktop 抓屏的丢帧与吞吐**，直接检验 speedup-methods.md B1 的前�
 
 import argparse
 import csv
-import gzip
 import hashlib
 import json
 import os
@@ -53,6 +52,7 @@ sys.path.insert(0, str(ROOT))
 from receiver import paths  # noqa: E402
 from receiver.calibrate import run_calibration  # noqa: E402
 from receiver.pipeline import FrameRejected, decode_frame  # noqa: E402
+from receiver.protocol import FEC_GROUP_SIZE, FEC_PARITY_FRAMES  # noqa: E402
 from receiver.run import run_receive  # noqa: E402
 from receiver.sources.desktop import (DXGIRecoveryError, iter_desktop,
                                       _dxgi_capture, _mss_capture)  # noqa: E402
@@ -76,6 +76,16 @@ WINDOW_SIZE = (1920, 1040)       # 请求值，实际被屏幕/任务栏钳制�
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 WORK_DIR = RESULTS_DIR / "work"
+FINAL_FRAME_HOLD_S = 1.0  # 与 sender.html FINAL_FRAME_HOLD_MS 一致
+
+
+def playback_cycle_seconds(total_frames: int, fps: int) -> float:
+    """按 sender.html 实际播放序列估算一轮：数据、元数据、FEC 和末帧停留。"""
+    metadata_frames = (total_frames + 99) // 100
+    fec_groups = (total_frames + FEC_GROUP_SIZE - 1) // FEC_GROUP_SIZE
+    sequence_frames = (total_frames + metadata_frames
+                       + fec_groups * FEC_PARITY_FRAMES)
+    return sequence_frames / fps + FINAL_FRAME_HOLD_S
 
 
 def window_rect_dip() -> tuple[int, int, int, int]:
@@ -141,6 +151,37 @@ class LiveReporter:
 
     def finish(self):
         pass
+
+
+class JsonlTrace:
+    """低开销的接收诊断日志：每条事件一行，关键停顿事件立即 flush。"""
+
+    _FLUSH_EVENTS = {"progress_milestone", "progress_stall", "stream_idle",
+                     "receive_done", "receive_incomplete", "restore_stage",
+                     "restore_stage_start", "restore_error"}
+
+    def __init__(self, path: Path, metadata: dict):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._file = path.open("w", encoding="utf-8", newline="\n")
+        self._lock = threading.Lock()
+        self._last_flush = time.perf_counter()
+        self({"event": "run_metadata", **metadata})
+        self._file.flush()
+
+    def __call__(self, event: dict) -> None:
+        with self._lock:
+            self._file.write(json.dumps(event, ensure_ascii=False) + "\n")
+            now = time.perf_counter()
+            if (event.get("event") in self._FLUSH_EVENTS
+                    or now - self._last_flush >= 1.0):
+                self._file.flush()
+                self._last_flush = now
+
+    def close(self) -> None:
+        with self._lock:
+            self._file.flush()
+            self._file.close()
 
 
 def compute_region(page) -> tuple[dict, float]:
@@ -243,7 +284,9 @@ def calibrate_capture(region: dict, backend: str, deadline: float) -> dict:
 
 
 def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
-                   backend: str = "mss", progress_dir: Path | None = None) -> None:
+                   backend: str = "mss", progress_dir: Path | None = None,
+                   trace_path: Path | None = None,
+                   trace_metadata: dict | None = None) -> None:
     """接收线程主体：结果与拒帧计数写入 box（线程内启动采集，随循环播放
     收齐后自然结束；file_id 每轮唯一，滞留不串轮）。
 
@@ -261,12 +304,15 @@ def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
         paths.PROGRESS_DIR = progress_dir
     stop = threading.Event()
     box["stop"] = stop
-    gen = iter_desktop(region=region, backend=backend)
+    ready = box.setdefault("ready", threading.Event())
+    gen = iter_desktop(region=region, backend=backend, on_ready=ready.set)
     box["capture_gen"] = gen
+    trace = JsonlTrace(trace_path, trace_metadata or {}) if trace_path else None
     t0 = time.perf_counter()
     try:
         result = run_receive(gen, out_dir, reporter_factory=lambda: rep,
-                             notify=None, stop_check=stop.is_set, prefetch=True)
+                             notify=None, stop_check=stop.is_set, prefetch=True,
+                             trace=trace)
         box["result"] = result
     finally:
         try:
@@ -276,6 +322,11 @@ def receive_worker(region: dict, out_dir: Path, raw: bytes, box: dict,
             # 已设置停止标志并等待其收尾，跨线程 close 只能作为尽力而为。
             pass
         box["worker_s"] = time.perf_counter() - t0
+        if trace is not None:
+            try:
+                trace.close()
+            except OSError as e:
+                box["trace_error"] = str(e)
         paths.PROGRESS_DIR = previous_progress
 
 
@@ -327,7 +378,7 @@ def load_and_play(page, path: Path, fps: int,
 
 
 def main() -> int:
-    global FPS_LIST, SIZE_MIB, REPS, CALIB_CYCLES
+    global FPS_LIST, SIZE_MIB, REPS, CALIB_CYCLES, WORK_DIR
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--quick", action="store_true",
                     help="冒烟：1MiB × FPS {30,60} × 1 次接收 × 1 轮校准")
@@ -343,6 +394,16 @@ def main() -> int:
                     help="每个 FPS 档接收次数（真实文件建议 1，默认基准为 3）")
     ap.add_argument("--calib-cycles", type=int, default=None,
                     help="每档 calibrate 循环数（真实文件可设 1）")
+    ap.add_argument("--trace", action="store_true",
+                    help="写出 JSONL 接收诊断日志：逐帧间隔/耗时、99% 缺帧号、还原阶段耗时")
+    ap.add_argument("--run-label", default="",
+                    help="隔离本次结果及进度目录，避免覆盖历史测试")
+    ap.add_argument("--skip-calibration", action="store_true",
+                    help="只运行正式接收，不额外等待完整校准周期（长周期复现用）")
+    ap.add_argument("--focus-grace-seconds", type=float, default=0,
+                    help="播放后等待用户把发送窗口置前的秒数（桌面被其他窗口遮挡时用）")
+    ap.add_argument("--receive-timeout-cycles", type=int, default=12,
+                    help="正式接收最长等待的名义播放轮数（默认 12，供长尾缺帧复现）")
     ap.add_argument("--fps-list", default=None,
                     help="逗号分隔 FPS 档位覆盖（如 15,20,30,45,60）")
     args = ap.parse_args()
@@ -350,6 +411,8 @@ def main() -> int:
         ap.error("--bit-css 范围为 1..15")
     if not 3 <= args.pad <= 15:
         ap.error("--pad 范围为 3..15")
+    if args.receive_timeout_cycles < 1:
+        ap.error("--receive-timeout-cycles 必须 >= 1")
     if args.quick:
         FPS_LIST, SIZE_MIB, REPS, CALIB_CYCLES = [30, 60], 1, 1, 1
     if args.fps_list:
@@ -368,6 +431,11 @@ def main() -> int:
             ap.error(f"--input 文件不存在：{args.input}")
     capture = args.capture
     suffix = "" if capture == "mss" else f"_{capture}"
+    if args.run_label:
+        if not all(c.isalnum() or c in "-_" for c in args.run_label):
+            ap.error("--run-label 只允许字母、数字、短横线和下划线")
+        suffix += "_" + args.run_label
+        WORK_DIR = WORK_DIR / args.run_label
     if args.input is not None:
         # 真实文件基准不能覆盖随机负载基准的历史结果。
         suffix += "_output"
@@ -443,6 +511,10 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
             # 载入文件自动播放（窗口模式），页面 JS 实测几何与画布
             load_and_play(page, raw_path, fps, args.bit_css, args.pad)
             page.bring_to_front()
+            if args.focus_grace_seconds > 0:
+                print(f"  等待 {args.focus_grace_seconds:g}s 让发送窗口置前后再自检",
+                      flush=True)
+                time.sleep(args.focus_grace_seconds)
             geo = page.evaluate("() => ({fps: __sender.state.geo.FPS,"
                                 " bit: __sender.state.geo.BIT,"
                                 " cols: __sender.state.geo.COLS,"
@@ -454,7 +526,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                 raise RuntimeError(f"物理 BIT {geo['bit']} 超出帧头 4 bit 上限，"
                                    "请降低显示缩放或 BIT")
             region, dpr = compute_region(page)
-            cycle_s = (geo["total"] + geo["total"] // 100 + 1) / fps
+            cycle_s = playback_cycle_seconds(geo["total"], fps)
             print(f"  物理几何 BIT={geo['bit']} {geo['cols']}x{geo['rows']}，"
                   f"数据帧 {geo['total']}，理论循环 {cycle_s:.1f}s，dpr={dpr}",
                   flush=True)
@@ -464,17 +536,20 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                                    "检查窗口遮挡 / 坐标换算")
             print("  抓屏对准自检通过", flush=True)
 
-            # calibrate：抓 CALIB_CYCLES 轮 + 宽限，deadline 干净收尾判级
-            calib_s = CALIB_CYCLES * cycle_s + GRACE_S
-            report = calibrate_capture(
-                region, capture, time.perf_counter() + calib_s)
-            fps_stat = report.get("measuredFps")
-            calibs.append({"fps": fps, "calib_s": round(calib_s, 1),
-                           "measuredFps": fps_stat, "report": report,
-                           "verdict": verdict_line(report)})
-            m = (f"，实测到达 FPS 中位 {fps_stat['median']}"
-                 f"（p5 {fps_stat['p5']} / p95 {fps_stat['p95']}）") if fps_stat else ""
-            print(f"  calibrate：{verdict_line(report)}{m}", flush=True)
+            if args.skip_calibration:
+                print("  calibrate：按 --skip-calibration 跳过", flush=True)
+            else:
+                # calibrate：抓 CALIB_CYCLES 轮 + 宽限，deadline 干净收尾判级
+                calib_s = CALIB_CYCLES * cycle_s + GRACE_S
+                report = calibrate_capture(
+                    region, capture, time.perf_counter() + calib_s)
+                fps_stat = report.get("measuredFps")
+                calibs.append({"fps": fps, "calib_s": round(calib_s, 1),
+                               "measuredFps": fps_stat, "report": report,
+                               "verdict": verdict_line(report)})
+                m = (f"，实测到达 FPS 中位 {fps_stat['median']}"
+                     f"（p5 {fps_stat['p5']} / p95 {fps_stat['p95']}）") if fps_stat else ""
+                print(f"  calibrate：{verdict_line(report)}{m}", flush=True)
 
             # REPS 次接收计时：每轮新随机文件（新 file_id 新进度目录），
             # 接收线程先就位 → 载文件触发播放并起表
@@ -491,18 +566,43 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                 page.wait_for_selector("body.playing", state="detached",
                                        timeout=5000)
                 out_dir = WORK_DIR / f"live_out_{fps}_{rep}"
-                expect_total = -(-len(gzip.compress(raw)) // geo["chunk"])
-                # 实收节拍 ≪ 播放 FPS 时一轮不止 cycle_s，按 6 轮给足
-                timeout_s = 6 * (expect_total / fps) + GRACE_S + 15
+                # 允许复现多轮补缺（原 6 轮上限会在 738s 长尾之前提前结束）；
+                # 用发送端完整播放序列估算，包括 FEC、元数据与末帧停留。
+                timeout_s = (args.receive_timeout_cycles * cycle_s
+                             + GRACE_S + 15)
 
-                box: dict = {}
+                box: dict = {"ready": threading.Event()}
+                trace_path = None
+                if args.trace:
+                    trace_path = (WORK_DIR / "traces" /
+                                  f"receive_{capture}_{fps}_{rep}_"
+                                  f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.jsonl")
+                    trace_metadata = {
+                        "mode": "window-playback-desktop",
+                        "capture": capture,
+                        "fps": fps,
+                        "input_bytes": len(raw),
+                        "input_sha256": fixed_sha or hashlib.sha256(raw).hexdigest(),
+                        "bit": geo["bit"], "cols": geo["cols"],
+                        "rows": geo["rows"], "chunk_size": geo["chunk"],
+                        "total_frames": geo["total"],
+                        "region": region,
+                        "estimated_cycle_s": round(cycle_s, 3),
+                        "playback_order": "interleaved",
+                        "interleave_depth": 64,
+                    }
+                    print(f"  逐帧诊断日志：{trace_path}", flush=True)
                 th = threading.Thread(target=receive_worker,
                                       args=(region, out_dir, raw, box),
                                       kwargs={"backend": capture,
-                                              "progress_dir": WORK_DIR / "progress" / f"{fps}_{rep}"},
+                                              "progress_dir": WORK_DIR / "progress" / f"{fps}_{rep}",
+                                              "trace_path": trace_path,
+                                              "trace_metadata": trace_metadata if trace_path else None},
                                       daemon=True)
                 th.start()
-                time.sleep(0.3)                   # 接收端就位（采集器打开）
+                if not box["ready"].wait(timeout=15):
+                    box.get("stop", threading.Event()).set()
+                    raise RuntimeError("接收采集器 15 秒内未就绪，停止本次测试")
                 t0 = time.perf_counter()
                 load_and_play(page, raw_path, fps, args.bit_css, args.pad)
                 page.bring_to_front()
@@ -533,14 +633,16 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                          "received": result.received, "total": result.total,
                          "rejected": box["reporter"].rejected,
                          "queue_produced": result.queue_produced,
-                         "queue_dropped": result.queue_dropped,
-                         "sha_ok": bool(result.sha256) and
-                                   result.sha256 == (fixed_sha or hashlib.sha256(raw).hexdigest()),
-                         "error": result.error}
+                          "queue_dropped": result.queue_dropped,
+                          "sha_ok": bool(result.sha256) and
+                                    result.sha256 == (fixed_sha or hashlib.sha256(raw).hexdigest()),
+                          "error": result.error,
+                          "trace": str(trace_path) if trace_path else None}
                 else:
                     r = {"rep": rep, "fps": fps,
                          "size_mib": round(len(raw) / 1024 / 1024, 3),
                          "failed": True, "wall_s": round(wall, 3),
+                         "trace": str(trace_path) if trace_path else None,
                          "note": f"超时 {timeout_s:.0f}s 未还原（滞留线程随循环自行收尾）"}
                 tier["reps"].append(r)
                 ok = "OK" if not r.get("failed") else "失败"
@@ -559,6 +661,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
     meta = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "live-desktop",
+        "playback_order": "interleaved", "interleave_depth": 64,
         "capture": capture,
         "input": str(args.input) if args.input is not None else None,
         "input_bytes": len(fixed_raw) if fixed_raw is not None else None,

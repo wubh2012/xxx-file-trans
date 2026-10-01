@@ -74,9 +74,8 @@ def test_cache_hit_skips_full_detection(tmp_path, monkeypatch):
     assert len(calls) == 1  # 第二帧命中缓存
 
 
-def test_cache_falls_back_when_marker_destroyed(tmp_path, monkeypatch):
-    """缓存命中后角标被涂黑的帧：轻量校验失败 → 回退全量 → 整帧拒绝；
-    后续好帧的几何与缓存一致，照常命中解码。"""
+def test_validated_cache_decodes_when_only_marker_destroyed(tmp_path, monkeypatch):
+    """已有验证几何时仅遮挡角标，数据区仍通过完整帧头和 CRC 校验。"""
     calls = _spy_bootstrap(monkeypatch)
     img = _render_frame(b"\xA5" * 64, tmp_path)
     cache = GeometryCache()
@@ -86,13 +85,39 @@ def test_cache_falls_back_when_marker_destroyed(tmp_path, monkeypatch):
     bit, pad = 4, 3
     broken = img.copy()
     broken[pad * bit - 3 * bit:pad * bit, pad * bit - 3 * bit:pad * bit] = 0  # 涂黑左上角标
-    with pytest.raises(FrameRejected) as e:
-        decode_frame(broken, cache)
-    assert e.value.reason == "geometry"
-    assert len(calls) == 2  # 回退走了全量检测
+    assert decode_frame(broken, cache) == decode_frame(img)
+    assert len(calls) == 2  # 无缓存参照额外检测一次
 
     decode_frame(img, cache)  # 好帧恢复：轻量校验通过，命中缓存
     assert len(calls) == 2
+
+
+def test_cached_geometry_rejects_marker_and_data_occlusion(tmp_path):
+    img = _render_frame(b"\xA5" * 64, tmp_path)
+    cache = GeometryCache()
+    decode_frame(img, cache)
+    broken = img.copy()
+    broken[:12, :12] = 0
+    broken[28:32, 28:32] = 255 - broken[28:32, 28:32]
+    with pytest.raises(FrameRejected):
+        decode_frame(broken, cache)
+
+
+def test_quick_threshold_falls_back_for_low_contrast(tmp_path):
+    img = _render_frame(b"\xA5" * 64, tmp_path)
+    cache = GeometryCache()
+    expected = decode_frame(img, cache)
+    dim = np.where(img == 0, 20, 100).astype(np.uint8)
+    assert decode_frame(dim, cache) == expected
+
+
+def test_failed_first_crc_does_not_validate_geometry(tmp_path):
+    img = _render_frame(b"\xA5" * 64, tmp_path)
+    img[28:32, 28:32] = 255 - img[28:32, 28:32]
+    cache = GeometryCache()
+    with pytest.raises(FrameRejected):
+        decode_frame(img, cache)
+    assert not cache._validated
 
 
 def test_cache_falls_back_on_shape_change(tmp_path):

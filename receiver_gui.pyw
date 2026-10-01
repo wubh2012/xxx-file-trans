@@ -16,6 +16,7 @@ import queue
 import time
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # 双击引导（issue #26）：双击 .pyw 时 Windows 用注册的解释器启动，未必是
@@ -31,11 +32,12 @@ if _venv_pythonw.is_file() and Path(sys.executable).resolve().parent != _venv_sc
     subprocess.Popen([str(_venv_pythonw), str(Path(__file__).resolve())], close_fds=True)
     sys.exit(0)
 
-from receiver.gui_core import (GUI_SOURCES, SOURCE_LABELS, ProgressModel,
-                               ReceiveJob, build_command, clear_progress,
-                               make_frames, progress_tasks, validate_config)
+from receiver.gui_core import (GUI_SOURCES, SOURCE_LABELS, JsonlTraceWriter,
+                               ProgressModel, ReceiveJob, build_command,
+                               clear_progress, make_frames, progress_tasks,
+                               validate_config)
 from receiver.notify import default_notifier
-from receiver.paths import OUTPUT_DIR
+from receiver.paths import DEBUG_DIR, OUTPUT_DIR
 from receiver.pick import pick_region
 from receiver.sources.desktop import format_region, parse_region
 from receiver.summary import restore_summary
@@ -60,6 +62,7 @@ class ReceiverGui:
         self._closing = False  # 关窗确认后等 done 事件再销毁
         self._close_at = 0.0  # 关窗确认时刻（宽限计时起点）
         self._notifier = default_notifier()
+        self.trace_path: Path | None = None
 
         self._build_setup()
         self._build_progress()
@@ -288,11 +291,44 @@ class ReceiverGui:
 
         source_params = {"frames_dir": dir_text, "video": video_text, "region": region,
                          "tape": self.tape_var.get()}
+        trace_path = DEBUG_DIR / (
+            f"receive_{datetime.now().astimezone().strftime('%Y%m%dT%H%M%S')}_"
+            f"{time.time_ns() % 1_000_000_000:09d}.jsonl")
+        try:
+            trace = JsonlTraceWriter(trace_path)
+        except OSError as e:
+            messagebox.showerror(
+                "无法创建诊断日志",
+                f"请把接收端 EXE 放在可写目录后重试。\n{trace_path}\n\n{e}",
+                parent=self.root)
+            return
+        self.trace_path = trace_path
+        try:
+            trace({
+                "event": "gui_session_start",
+                "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                "source": source,
+                "capture_requested": "auto" if source == "desktop" else None,
+                "region": region,
+                "frozen_exe": bool(getattr(sys, "frozen", False)),
+            })
+        except OSError as e:
+            trace.close()
+            messagebox.showerror("无法写入诊断日志", str(e), parent=self.root)
+            return
+
+        def on_backend(backend, phase):
+            trace({"event": "capture_backend", "backend": backend,
+                   "phase": phase})
+            if phase == "ready" and self.events is not None:
+                self.events.put(("capture_ready",))
+
         self.model = ProgressModel()
         self.events = queue.Queue()
-        self.job = ReceiveJob(lambda: make_frames(source, **source_params),
+        self.job = ReceiveJob(lambda: make_frames(
+                                  source, **source_params, on_backend=on_backend),
                               OUTPUT_DIR, self.events, notify=self._notifier,
-                              prefetch=(source == "desktop"))
+                              prefetch=(source == "desktop"), trace=trace)
         self.result_var.set("")
         self.result_label.pack_forget()
         self._set_setup_state("disabled")
@@ -358,6 +394,9 @@ class ReceiverGui:
                 + (f"\n{result.incomplete}" if result.incomplete else "")
                 + suffix)
             self.result_label.config(foreground="#a12020")
+        if self.trace_path is not None:
+            self.result_var.set(self.result_var.get() +
+                                f"\n诊断日志：{self.trace_path}")
         self.result_label.pack(fill="x")
         if self._closing:
             self.root.destroy()

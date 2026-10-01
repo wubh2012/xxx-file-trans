@@ -49,6 +49,17 @@ def recover_one(parity0: bytes, known: list[bytes | None]) -> bytes:
     return bytes(out)
 
 
+def recover_one_weighted(parity1: bytes, known: list[bytes | None], missing: int) -> bytes:
+    """P0 丢失时，利用 P1 的非零系数恢复单个缺失数据分片。"""
+    out = bytearray(parity1)
+    for idx, part in enumerate(known):
+        if part is not None:
+            for i, value in enumerate(part):
+                out[i] ^= gf_mul(idx + 1, value)
+    inv = gf_inv(missing + 1)
+    return bytes(gf_mul(value, inv) for value in out)
+
+
 def recover_two(parity0: bytes, parity1: bytes,
                 known: list[bytes | None], missing: tuple[int, int]) -> tuple[bytes, bytes]:
     """P0/P1 联立恢复两个缺失分片。"""

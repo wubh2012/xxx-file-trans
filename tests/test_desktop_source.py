@@ -79,6 +79,16 @@ def test_iter_desktop_change_detection(tmp_path):
     assert len(names) == len(paths)
 
 
+def test_capture_ready_notifies_before_stable_frame_emitted():
+    events = []
+    image = np.zeros((16, 16), dtype=np.uint8)
+    frames = iter_desktop(capture=iter([image, image]), on_ready=lambda: events.append("ready"))
+    name, _ = next(frames)
+    assert events == ["ready"]
+    assert name == "desktop-000001"
+    frames.close()
+
+
 # ---------- 缝 B 集成：desktop 通路 → 还原（含噪点注入）----------
 
 def _frames_with_noise(paths: list[Path]):

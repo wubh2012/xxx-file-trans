@@ -1,0 +1,107 @@
+{
+  "meta": {
+    "generated_at": "2026-10-01T11:09:32.325455+00:00",
+    "mode": "live-desktop",
+    "capture": "dxgi",
+    "input": "D:\\AI\\xxx-file-trans\\benchmark\\fixtures\\red-panda.jpg",
+    "input_bytes": 3567634,
+    "input_sha256": "84bd755492ce6a23b349cc8127dd44322e84cba25480d288b78f1b61580b8d74",
+    "fps_list": [
+      20,
+      30
+    ],
+    "size_mib": 3.402,
+    "reps": 1,
+    "calib_cycles": 1,
+    "bit_css": 6,
+    "pad": 3,
+    "window": [
+      1536,
+      816
+    ],
+    "window_pos": [
+      0,
+      0
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）"
+  },
+  "calibrations": [],
+  "runs": [
+    {
+      "fps": 20,
+      "geo": {
+        "fps": 20,
+        "bit": 8,
+        "cols": 216,
+        "rows": 91,
+        "chunk": 2431,
+        "total": 1468
+      },
+      "cycle_s": 79.8,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 80,
+        "width": 1920,
+        "height": 976
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 20,
+          "size_mib": 3.402,
+          "failed": false,
+          "wall_s": 81.11,
+          "elapsed_s": 80.851,
+          "received": 1468,
+          "total": 1468,
+          "rejected": 6,
+          "queue_produced": 1494,
+          "queue_dropped": 0,
+          "sha_ok": true,
+          "error": null,
+          "trace": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\panda-optimized-20261001\\traces\\receive_dxgi_20_0_20261001T110716.jsonl"
+        }
+      ]
+    },
+    {
+      "fps": 30,
+      "geo": {
+        "fps": 30,
+        "bit": 8,
+        "cols": 216,
+        "rows": 91,
+        "chunk": 2431,
+        "total": 1468
+      },
+      "cycle_s": 53.5,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 80,
+        "width": 1920,
+        "height": 976
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 30,
+          "size_mib": 3.402,
+          "failed": false,
+          "wall_s": 54.103,
+          "elapsed_s": 53.899,
+          "received": 1468,
+          "total": 1468,
+          "rejected": 2,
+          "queue_produced": 1485,
+          "queue_dropped": 0,
+          "sha_ok": true,
+          "error": null,
+          "trace": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\panda-optimized-20261001\\traces\\receive_dxgi_30_0_20261001T110837.jsonl"
+        }
+      ]
+    }
+  ]
+}

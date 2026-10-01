@@ -9,6 +9,7 @@ now 由调用方显式传入（单调时钟），测试完全确定性。
 """
 
 import numpy as np
+import pytest
 
 from receiver.sources.stable import StableFrameGate
 
@@ -140,3 +141,39 @@ def test_flush_without_pending_candidate():
     assert g.feed(a, now=0.0) is None
     assert g.feed(a, now=0.1) is not None  # A 稳定放行，候选已清空
     assert g.flush() is None
+
+
+@pytest.mark.parametrize("tol", [0, 2, 2.5, 255])
+@pytest.mark.parametrize("frac_max", [0, 5e-4, 0.25, 1])
+def test_comparison_matches_original_at_noise_boundaries(tol, frac_max):
+    """像素差和噪点比例的边界不因 uint8 快速路径而改变。"""
+    g = StableFrameGate(tol=tol, frac_max=frac_max)
+    a = np.zeros((40, 50), dtype=np.uint8)
+    for count in (0, 1, 2, 499, 500, 501, 2000):
+        b = a.copy()
+        b.flat[:count] = 3
+        b.flat[0] = 255  # 无符号差值不得回绕
+        for left, right in ((a, b), (b, a)):
+            expected = bool((np.abs(left.astype(np.int16)
+                                    - right.astype(np.int16)) > tol).mean() <= frac_max)
+            assert g._same(left, right) == expected
+
+
+def test_comparison_strided_frames_and_buffer_resize():
+    """裁切视图、区域尺寸切换与缓冲区复用应保持逐像素一致。"""
+    g = StableFrameGate()
+    for size in (32, 64, 32):
+        a = img(7, size)[::2, ::2]
+        b = a.copy()
+        assert g._same(a, b)
+        diff_buffer = g._diff
+        b[0, 0] = 255 - b[0, 0]
+        assert not g._same(a, b)
+        assert g._diff is diff_buffer
+
+
+def test_comparison_non_uint8_preserves_original_behavior():
+    g = StableFrameGate()
+    a = img(1).astype(np.int16)
+    assert g._same(a, a.copy())
+    assert not g._same(a, 255 - a)

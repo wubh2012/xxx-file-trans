@@ -514,18 +514,25 @@ function updateTitleProgress(ts) {
 }
 
 let rafId = 0, lastTs = 0, playPos = 0, holdUntil = 0, playbackSequence = [];
-function buildPlaybackSequence() {
+function buildPlaybackSequence(interleaveDepth = state.playMode === 'window' ? 64 : 1) {
   const seq = [];
-  let group = 0;
-  for (let frameNo = 0; frameNo < state.totalFrames; frameNo++) {
-    if (frameNo % 100 === 0) seq.push(-1); // 元数据帧（每 100 个数据帧）
-    seq.push(frameNo);
-    if (frameNo % FEC_GROUP_SIZE === FEC_GROUP_SIZE - 1
-        || frameNo === state.totalFrames - 1) {
-      for (let parity = 0; parity < FEC_PARITY_FRAMES; parity++) {
-        seq.push(-(2 + state.totalFrames + group * FEC_PARITY_FRAMES + parity));
+  const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
+  let dataCount = 0;
+  for (let base = 0; base < groups; base += interleaveDepth) {
+    const end = Math.min(groups, base + interleaveDepth);
+    // 交错不同纠错组的同一位置；连续丢帧分散到不同组，不改变帧格式。
+    for (let slot = 0; slot < FEC_GROUP_SIZE + FEC_PARITY_FRAMES; slot++) {
+      for (let group = base; group < end; group++) {
+        if (slot < FEC_GROUP_SIZE) {
+          const frameNo = group * FEC_GROUP_SIZE + slot;
+          if (frameNo >= state.totalFrames) continue;
+          if (dataCount++ % 100 === 0) seq.push(-1);
+          seq.push(frameNo);
+        } else {
+          seq.push(-(2 + state.totalFrames + group * FEC_PARITY_FRAMES
+                     + slot - FEC_GROUP_SIZE));
+        }
       }
-      group++;
     }
   }
   return seq;
@@ -545,10 +552,10 @@ function loop(ts) {
       renderMetadataFrame();
     } else if (item >= 0) {
       renderFrame(item);
-      if (item === state.totalFrames - 1) holdUntil = ts + FINAL_FRAME_HOLD_MS;
     } else {
       renderFecFrame(-item - 2);
     }
+    if (playPos === playbackSequence.length - 1) holdUntil = ts + FINAL_FRAME_HOLD_MS;
     playPos = (playPos + 1) % playbackSequence.length;
     if (playPos === 0) roundNo++;   // 循环回卷即一轮播完（issue #33 标题轮次）
   }
@@ -793,7 +800,7 @@ function ensureFrameState() {
   }
 }
 function exportSequence() {
-  return buildPlaybackSequence();
+  return buildPlaybackSequence(1); // PNG 导出保持顺序编号，实时桌面播放才交错。
 }
 function pngBytes() {
   return new Promise((resolve) => stage.toBlob(resolve, 'image/png'))
@@ -1086,7 +1093,7 @@ renderSop();
 
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
 window.__sender = {
-  state, selfTest, crcUpdate, crcFinal, deriveGeometry,
+  state, selfTest, crcUpdate, crcFinal, deriveGeometry, buildPlaybackSequence,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
   renderFrame, renderMetadataFrame, buildExportFrames, buildReceiverCommand,
   hasWakeLock: () => !!wakeLock,   // Wake Lock 生命周期断言（issue #32）
