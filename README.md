@@ -4,6 +4,26 @@
 
 面向普通文件传输通道不可用、但仍能显示或交接画面的场合：发送端把文件编码为连续的黑白方块画面，接收端读取画面并还原文件。适合日志、配置、报表和小型资料包的单向摆渡，无需接收端逐帧确认。
 
+## 直接下载（Windows）
+
+无需配置 Python，前往 [最新 Release](https://github.com/wubh2012/xxx-file-trans/releases/latest) 下载：
+
+| 文件 | 用途 |
+|---|---|
+| [tapemaker_gui.exe](https://github.com/wubh2012/xxx-file-trans/releases/latest/download/tapemaker_gui.exe) | 制作端：选择文件，编码生成 MP4 视频 |
+| [receiver_gui.exe](https://github.com/wubh2012/xxx-file-trans/releases/latest/download/receiver_gui.exe) | 接收端：通过桌面抓屏、视频文件或 PNG 序列还原文件 |
+| [sender.html](https://github.com/wubh2012/xxx-file-trans/releases/latest/download/sender.html) | 浏览器发送端：下载后用现代浏览器打开，播放画面或导出 PNG 序列 |
+| [SHA256SUMS.txt](https://github.com/wubh2012/xxx-file-trans/releases/latest/download/SHA256SUMS.txt) | 下载文件的 SHA-256 校验值 |
+
+将 EXE 放到可写目录后双击运行。接收端默认在 EXE 所在目录创建 `output/`、`progress/` 和 `debug/`。**制作端生成 MP4 仍需要安装 FFmpeg，并将其加入 PATH**；安装后重新打开制作端。源码运行步骤见下方快速开始。
+
+### B 站测试视频
+
+- [测试视频 1（BV1Euan6zEL8）](https://www.bilibili.com/video/BV1Euan6zEL8/)
+- [测试视频 2（BV1ata16YEWg）](https://www.bilibili.com/video/BV1ata16YEWg/)
+
+可用于测试接收端对平台视频画面的识别与还原。测试时尽量选择最高画质，保持完整数据画面可见；平台二次压缩、播放缩放和抓屏环境可能影响结果。
+
 ## 使用效果
 
 ```text
@@ -28,7 +48,7 @@
 
 | 项目 | 当前边界 |
 |---|---|
-| 运行环境 | 以下步骤以 Windows 11 和 PowerShell 为基准；接收端与制片工具需要 Python ≥ 3.11 |
+| 运行环境 | 以下源码步骤以 Windows 11 和 PowerShell 为基准，需要 Python ≥ 3.11；Release 中的 EXE 无需 Python |
 | 摄像头拍屏 | `camera` 源仅为接口骨架，完整实时采集尚未实现 |
 | 画面质量 | 播放区域需保持清晰、完整、无遮挡；远程桌面缩放与压缩需要在目标环境验证 |
 | 视频平台 | 上传、下载由人工完成；平台二次压缩后的还原效果需要实测定标 |
@@ -201,13 +221,13 @@ GUI 可用 `.venv/Scripts/pythonw.exe tapemaker_gui.pyw` 启动。参数、轮�
 
 注意：测试配置会清空 `.tmp/`，不要在其中存放需要保留的文件。
 
-### 打包 Windows 接收程序
+### 打包 Windows 制作端与接收端
 
 ```powershell
 .\build_exe.ps1
 ```
 
-产物为 `dist/receiver_gui.exe`。独立程序无需 Python 环境，其默认 `output/`、`progress/` 和 `debug/` 位于 exe 所在目录。
+产物为 `dist/receiver_gui.exe` 和 `dist/tapemaker_gui.exe`。两个独立程序均无需 Python 环境；制作端生成 MP4 仍依赖 PATH 中的 FFmpeg。接收端默认的 `output/`、`progress/` 和 `debug/` 位于 EXE 所在目录。
 
 ## 许可证
 
