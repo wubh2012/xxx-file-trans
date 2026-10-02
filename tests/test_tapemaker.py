@@ -14,6 +14,7 @@
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -232,9 +233,10 @@ def test_make_roundtrip_larger_file_fec_and_rounds(tmp_path):
 
 
 @needs_ffmpeg
-def test_make_roundtrip_via_receiver_video_source(tmp_path):
+@pytest.mark.parametrize("tape", [False, True])
+def test_make_roundtrip_via_receiver_video_source(tmp_path, tape):
     """§11.4.1 完整链路（issue #39）：tapemaker 制片 → receiver video 源
-    （片模式旁路稳定闸门，issue #45）→ run_receive 还原，sha256 一致。"""
+    （旧 tape 开关两种取值）→ run_receive 还原，sha256 一致。"""
     from receiver.sources.video import iter_video
 
     src = tmp_path / "链路验证.bin"
@@ -243,9 +245,33 @@ def test_make_roundtrip_via_receiver_video_source(tmp_path):
     out_mp4 = tmp_path / "tape.mp4"
     assert main(["make", str(src), "-o", str(out_mp4)]) == 0
 
-    result = run_receive(iter_video(out_mp4, tape=True), tmp_path / "out")
+    result = run_receive(iter_video(out_mp4, tape=tape), tmp_path / "out")
     assert result.code == 0, f"还原失败：{result.error or result.incomplete}"
     assert result.sha256 == hashlib.sha256(src_bytes).hexdigest()
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("fps", [30, 60])
+def test_transcoded_tape_restores_with_default_video_source(tmp_path, fps):
+    """模拟有损二压、GOP 和升帧重复；默认 video 通路还原字节一致。"""
+    from receiver.sources.video import iter_video
+
+    src_bytes = _payload(30_000, seed=20261002)
+    src = tmp_path / "transcoded.bin"
+    src.write_bytes(src_bytes)
+    original = tmp_path / "original.mp4"
+    assert main(["make", str(src), "-o", str(original)]) == 0
+    transcoded = tmp_path / "transcoded.mp4"
+    subprocess.run([
+        shutil.which("ffmpeg"), "-y", "-v", "error", "-i", str(original),
+        "-c:v", "libx264", "-crf", "28", "-g", "60",
+        "-pix_fmt", "yuv420p", "-vf", f"fps={fps}", str(transcoded),
+    ], check=True, capture_output=True, timeout=60)
+
+    result = run_receive(iter_video(transcoded), tmp_path / "out")
+    assert result.code == 0, result.error or result.incomplete
+    assert result.sha256 == hashlib.sha256(src_bytes).hexdigest()
+    assert result.dest.read_bytes() == src_bytes
 
 
 def test_make_missing_source_exits(tmp_path):

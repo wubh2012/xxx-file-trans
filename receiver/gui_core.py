@@ -17,6 +17,7 @@ import queue
 import shutil
 import threading
 import time
+import cv2
 from pathlib import Path
 
 from receiver import paths
@@ -40,7 +41,7 @@ SOURCE_LABELS = {
 
 
 def build_command(source: str, *, frames_dir=None, video=None, region=None,
-                  tape=False) -> str:
+                  tape=False, capture="auto") -> str:
     """GUI 当前参数 → 等效完整命令文本（发送端命令助手，issue #26）。
 
     与 CLI 实际使用的参数一致（含具体坐标）：desktop region 为 None
@@ -49,7 +50,7 @@ def build_command(source: str, *, frames_dir=None, video=None, region=None,
     """
     if source == "desktop":
         # 与 CLI 当前默认一致：Windows 优先 DXGI，不可用时回退 mss。
-        cmd = f"{COMMAND_PREFIX} --source desktop --capture auto"
+        cmd = f"{COMMAND_PREFIX} --source desktop --capture {capture}"
         if region is not None:
             cmd += f" --region {format_region(region)}"
         return cmd
@@ -58,7 +59,7 @@ def build_command(source: str, *, frames_dir=None, video=None, region=None,
     if source == "video":
         cmd = f'{COMMAND_PREFIX} --source video --video "{video}"'
         if tape:
-            cmd += " --tape"   # 片模式（issue #45）：制片 MP4 旁路稳定闸门
+            cmd += " --tape"   # 兼容旧命令；视频默认逐帧解析
         return cmd
     raise ValueError(f"未知源 {source}")
 
@@ -93,7 +94,7 @@ def validate_config(source: str, *, frames_dir=None, video=None,
 
 
 def make_frames(source: str, *, frames_dir=None, video=None, region=None,
-                tape=False, on_backend=None):
+                tape=False, on_backend=None, capture="auto"):
     """GUI 参数 → 取帧源迭代器（与 CLI 同分派，issue #26）。
 
     desktop / video 生成器惰性打开：真实抓屏 / 解码在接收线程首次迭代
@@ -102,7 +103,7 @@ def make_frames(source: str, *, frames_dir=None, video=None, region=None,
     if source == "images":
         return iter_source("images", Path(frames_dir))
     if source == "desktop":
-        return iter_desktop(region=region, on_backend=on_backend)
+        return iter_desktop(region=region, on_backend=on_backend, backend=capture)
     if source == "video":
         return iter_video(video, tape=tape)
     raise ValueError(f"未知源 {source}")
@@ -152,7 +153,9 @@ class ProgressModel:
         self.seen = 0  # 读入画面总数（识别率分母）
         self.discarded = 0  # 丢弃画面数（识别率减项）
         self._t0: float | None = None
+        self._stopped_at: float | None = None
         self.capture_ready = False
+        self.last_rejection = None
 
     def on_event(self, ev: tuple) -> None:
         """消化一条 QueuedReporter 事件（decoded / rejected / total）。"""
@@ -169,13 +172,19 @@ class ProgressModel:
         elif kind == "rejected":
             self.seen += 1
             self.discarded += 1
+            self.last_rejection = ev[1]
         elif kind == "total":
             self.total, completed = ev[1], ev[2]
             self.received = completed  # 断点续传重同步（同 set_total 语义）
 
     @property
     def elapsed(self) -> float:
-        return 0.0 if self._t0 is None else self.clock() - self._t0
+        end = self.clock() if self._stopped_at is None else self._stopped_at
+        return 0.0 if self._t0 is None else end - self._t0
+
+    def stop(self) -> None:
+        if self._stopped_at is None:
+            self._stopped_at = self.clock()
 
     @property
     def rate(self) -> float:
@@ -186,6 +195,11 @@ class ProgressModel:
     def summary_line(self) -> str:
         """进度单行：「已收 N/M 帧（P%） · 识别率 R% · 耗时 T s」。"""
         if self.capture_ready and self.total is None:
+            if self.discarded:
+                reason = {"geometry": "角标或网格不匹配", "sync": "同步字不匹配",
+                          "crc": "数据校验失败"}.get(self.last_rejection, self.last_rejection)
+                return (f"已采集 {self.seen} 帧，尚未识别数据帧；最近拒因：{reason}。"
+                        "请检查视频画质、缩放及角标遮挡")
             return "采集已就绪，请在发送端开始播放；保持画面无遮挡"
         total_s = "?" if self.total is None else self.total
         line = f"已收 {self.received}/{total_s} 帧"
@@ -236,7 +250,7 @@ class JsonlTraceWriter:
         "receive_done", "gui_job_done",
     }
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, save_rejected_frames=False):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._stream = self.path.open("x", encoding="utf-8", newline="\n")
@@ -244,6 +258,27 @@ class JsonlTraceWriter:
         self._closed = False
         self._pending = 0
         self._last_flush = time.monotonic()
+        self._save_rejected_frames = save_rejected_frames
+        self._snapshot_count = 0
+        self._last_snapshot = None
+
+    def save_rejected_frame(self, img, reason):
+        """最多保存三张间隔两秒的接收失败画面；仅保存当前采集区域。"""
+        now = time.monotonic()
+        if (not self._save_rejected_frames or self._closed or self._snapshot_count >= 3
+                or (self._last_snapshot is not None and now - self._last_snapshot < 2)):
+            return
+        ok, encoded = cv2.imencode(".png", img.copy())
+        if not ok:
+            return
+        directory = self.path.with_suffix("")
+        directory.mkdir(exist_ok=True)
+        dest = directory / f"rejected_{self._snapshot_count + 1:02d}.png"
+        dest.write_bytes(encoded.tobytes())
+        self._snapshot_count += 1
+        self._last_snapshot = now
+        self({"event": "frame_snapshot", "reason": reason,
+              "path": str(dest.resolve()), "shape": list(img.shape)})
 
     def __call__(self, event: dict) -> None:
         line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
@@ -278,13 +313,14 @@ class ReceiveJob:
     """
 
     def __init__(self, frames_factory, out_dir: Path, events: queue.Queue,
-                 notify=None, prefetch: bool = False, trace=None):
+                 notify=None, prefetch: bool = False, trace=None, allow_scaled=False):
         self._frames_factory = frames_factory
         self._out_dir = Path(out_dir)
         self._events = events
         self._notify = notify
         self._prefetch = prefetch
         self._trace = trace
+        self._allow_scaled = allow_scaled
         self._stop_flag = threading.Event()
 
     def start(self) -> None:
@@ -305,17 +341,16 @@ class ReceiveJob:
                 stop_check=self._stop_flag.is_set,
                 prefetch=self._prefetch,
                 trace=self._trace,
+                allow_scaled=self._allow_scaled,
             )
         except Exception as e:  # 兜底：取帧源打不开等异常转错误结果
             result = ReceiveResult(code=1, error=f"接收异常：{e}")
         finally:
-            if frames is not None and hasattr(frames, "close"):
+            if not self._prefetch and frames is not None and hasattr(frames, "close"):
                 try:
                     frames.close()  # 协作停止后生成器不再被消费，显式释放采集资源
-                except ValueError:
-                    # C3 生产者线程可能正在 generator.next()；停止标志已置位，
-                    # 跨线程 close 失败时由生产者自行在下一次取帧后退出。
-                    pass
+                except Exception as e:
+                    result.warnings.append(f"告警：采集资源释放失败（{e}）")
             if self._trace is not None:
                 try:
                     self._trace({"event": "gui_job_done", "code": result.code,

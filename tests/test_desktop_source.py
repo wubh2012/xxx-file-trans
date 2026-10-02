@@ -217,11 +217,17 @@ def test_cli_desktop_dispatch_passes_region(monkeypatch):
         yield "desktop-000001", np.zeros((10, 10), np.uint8)  # 首帧正常进入循环
         raise KeyboardInterrupt  # 模拟接收中 Ctrl+C（真实生成器异常在迭代中发生）
 
+    def fake_resolve_backend(requested):
+        seen["requested"] = requested
+        return "mss" if requested == "auto" else requested
+
+    monkeypatch.setattr(cli, "resolve_capture_backend", fake_resolve_backend)
     monkeypatch.setattr(cli, "iter_desktop", fake_iter_desktop)
     rc = main(["receive", "--source", "desktop", "--region", "15,25,320,240"])
     assert rc == 1
     assert seen["region"] == {"left": 15, "top": 25, "width": 320, "height": 240}
-    assert seen["backend"] == "auto"  # Windows 优先 DXGI，不可用时回退 mss
+    assert seen["requested"] == "auto"
+    assert seen["backend"] == "mss"  # 分派传入已解析后端，而非 auto 选择器
 
     seen.clear()
     main(["receive", "--source", "desktop", "--region", "15,25,320,240",

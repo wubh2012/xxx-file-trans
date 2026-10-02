@@ -33,16 +33,16 @@
 .venv/Scripts/python.exe -m tapemaker make 文件 -o out.mp4
 
 # 2.（强烈建议）上传前自检：本机解码还原，确认片本身没问题
-.venv/Scripts/python.exe -m receiver receive --source video --video out.mp4 --tape --out out_pre
+.venv/Scripts/python.exe -m receiver receive --source video --video out.mp4 --out out_pre
 #    比对还原文件与原文件一致（receiver 输出末尾有 sha256）
 
 # 3. 人工上传 out.mp4 到视频平台（不要加片头/水印等平台侧编辑）
 
 # 4. 对端人工下载最高清晰度版本，还原：
-.venv/Scripts/python.exe -m receiver receive --source video --video 下载的视频.mp4 --tape --out out_post
+.venv/Scripts/python.exe -m receiver receive --source video --video 下载的视频.mp4 --out out_post
 ```
 
-`make` 跑完会打印：压缩后字节数、fileId、几何参数、帧数与时长；`--tape` 是 video 源的片模式（issue #45），旁路稳定闸门逐帧直读制片 MP4，务必带上。
+`make` 跑完会打印：压缩后字节数、fileId、几何参数、帧数与时长；video 源现在默认逐帧解析制片、录屏和平台下载视频，GUI 无需勾选模式；`--tape` 仅保留兼容旧命令。重复帧按帧号幂等处理，坏帧由协议校验拒绝。
 
 ## make 参数
 
@@ -87,11 +87,23 @@ python -m tapemaker calibrate <样本文件> -o <目录> [--crf 18,23,28] [--bit
 
 默认值的效力目前来自 calibrate 的**模拟**二压；真实平台的二压强度需实测定标（issue #41），定标结论回填本工具默认值。
 
+## B 站交接验证
+
+先用代表性小文件跑完整链路：制片 → 本地还原并比对 SHA-256 → 上传 → 等转码完成 → 下载对应清晰度视频 → 再还原并比对 SHA-256。接收端选择「视频文件」即可。
+
+逐帧解析解决接收端主动跳帧的问题，不能恢复平台已经删除或损坏的画面。模拟 CRF 二压通过也不等于真实平台通过，实际下载版本的分辨率、帧率和压缩强度都需验证。上传文件中的全 I 帧设置也不能约束平台重编码后的 GOP。
+
+如需用 desktop 抓取 B 站播放器，选择 1080P 或更高清晰度，关闭弹幕，框选完整视频画面及四个角标，避免播放器控件遮挡。新版 desktop/video 接收支持等比例的非整数显示缩放：先由角标标定显示格距，再读取并校验逻辑帧头与完整 CRC；images 源仍按原始像素几何严格校验。四角缺失、画面过小或平台损坏的数据仍会被拒绝，不能保证任意缩放和码率都能还原。离线下载视频后用 video 源解析可避免实时抓屏漏帧。 视频画面周围的白色页面边距由黑色画布定位隔离；角标定位会容忍转码造成的细小粘连，数据采样仍使用原图并校验完整 CRC。接收窗口必须放在采集区域之外，或在开始后最小化，避免覆盖传输数据。
+
+接收界面在有拒帧且尚未识别数据帧时，会显示采集帧数及最近拒因，用于区分采集未开始与画面识别失败。 GUI 的「采集后端」可选 auto / mss / dxgi；截图能解码而实时采集始终失败时，可切换 mss 做对照，并重新框选完整视频区域。desktop 会在诊断日志旁按需保存最多三张失败画面（同名子目录中的 rejected_01.png 等，间隔至少两秒），只保存所选采集区域，用于比对实际取帧内容。
+
+出现缺帧时先区分 CRC 拒帧与降帧：压缩失真可试较大 BIT、更多轮次并重新验证；规律降帧可能在每轮都删掉相同帧号，仅增加轮数不能保证恢复，需要保持原帧率的下载版本，或重新设计每个传输帧的停留时间/轮次排列。
+
 ## 完整链路与职责划分
 
 | 环节 | 执行者 |
 |---|---|
 | 制片 | `tapemaker make` |
 | 上传视频平台 / 下载 | **人工** |
-| 还原 | `receiver receive --source video --video <片> --tape` |
+| 还原 | `receiver receive --source video --video <片>` |
 | 定标 | `tapemaker calibrate` + 真实平台投稿实测（issue #41） |

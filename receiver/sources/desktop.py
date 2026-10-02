@@ -279,8 +279,34 @@ def _dxgi_capture(region: dict | None,
             _release_dxgi_camera(camera)
 
 
+class _DesktopFrames:
+    """跨线程仅发送停止信号，生成器与抓屏资源仍由采集线程关闭。"""
+
+    def __init__(self, region, capture, backend, on_backend, on_ready):
+        self._stop = threading.Event()
+        self._frames = _iter_desktop(region, capture, backend, on_backend,
+                                     on_ready, self._stop.is_set)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._frames)
+
+    def request_stop(self):
+        self._stop.set()
+
+    def close(self):
+        self.request_stop()
+        self._frames.close()
+
+
 def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto",
                  on_backend=None, on_ready=None):
+    return _DesktopFrames(region, capture, backend, on_backend, on_ready)
+
+
+def _iter_desktop(region, capture, backend, on_backend, on_ready, stop_check):
     """desktop 源迭代器：capture 缺省按 backend 真实抓屏（auto / mss / dxgi），
     测试可注入图像序列。关闭时显式 close 内层采集生成器（释放抓屏资源，
     不依赖 GC 终结时机）。"""
@@ -302,9 +328,11 @@ def iter_desktop(region: dict | None = None, capture=None, backend: str = "auto"
             except Exception:  # noqa: BLE001 诊断回调不得影响抓屏
                 pass
     try:
-        while True:
+        while not stop_check():
             try:
                 for gray in capture:
+                    if stop_check():
+                        return
                     if not ready:
                         ready = True
                         if on_ready is not None:

@@ -66,16 +66,18 @@ class PrefetchedFrames:
 
     _END = object()
 
-    def __init__(self, frames, *, maxsize: int = 2, on_idle=None):
+    def __init__(self, frames, *, maxsize: int = 2, on_idle=None, stop_check=None):
         if maxsize < 1:
             raise ValueError("maxsize 必须 ≥ 1")
         self._frames = frames
         self._on_idle = on_idle
+        self._stop_check = stop_check
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.stats = FrameQueueStats()
         self.error: BaseException | None = None
+        self.cleanup_error: Exception | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -113,6 +115,13 @@ class PrefetchedFrames:
         except BaseException as exc:  # 在消费者线程重新抛出，保留原异常
             self.error = exc
         finally:
+            # 原始采集器由生产线程创建和释放；MSS 的 Windows DC 不能跨线程释放。
+            close = getattr(self._frames, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:
+                    self.cleanup_error = exc
             if not self._stop.is_set():
                 while True:
                     try:
@@ -127,15 +136,17 @@ class PrefetchedFrames:
         return self
 
     def __next__(self):
-        if self._on_idle is None:
-            item = self._queue.get()
-        else:
-            while True:
-                try:
-                    item = self._queue.get(timeout=1.0)
-                    break
-                except queue.Empty:
+        idle_at = time.monotonic()
+        while True:
+            if self._stop.is_set() or (self._stop_check is not None and self._stop_check()):
+                raise StopIteration
+            try:
+                item = self._queue.get(timeout=0.1)
+                break
+            except queue.Empty:
+                if self._on_idle is not None and time.monotonic() - idle_at >= 1.0:
                     self._on_idle(self.stats, self._queue.qsize())
+                    idle_at = time.monotonic()
         if item is self._END:
             if self.error is not None:
                 raise self.error
@@ -144,21 +155,21 @@ class PrefetchedFrames:
 
     def close(self) -> None:
         self._stop.set()
-        close = getattr(self._frames, "close", None)
-        if close is not None:
-            try:
+        request_stop = getattr(self._frames, "request_stop", None)
+        if request_stop is not None:
+            request_stop()
+        if self._thread is None:
+            # 尚未启动的惰性源没有线程资源，可在调用方关闭。
+            close = getattr(self._frames, "close", None)
+            if close is not None:
                 close()
-            except ValueError:
-                # 生成器正在生产者线程中执行时，Python 禁止跨线程 close；
-                # stop 标志仍会让生产者在下一次取帧后退出。
-                pass
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=0.5)
 
 
 def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                 notify=None, stop_check=None, *, prefetch: bool = False,
-                prefetch_size: int = 2, trace=None) -> ReceiveResult:
+                prefetch_size: int = 2, trace=None, allow_scaled=False) -> ReceiveResult:
     """接收主循环：frames 为任一取帧源的 (名称, 灰度图) 迭代器。
 
     reporter_factory 返回 ProgressReporter 同接口对象（上下文管理器 +
@@ -167,6 +178,8 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
     prefetch 为真时启用 C3 有界生产者/消费者队列，适用于实时 desktop
     源；prefetch_size 为队列容量，默认只保留少量最新候选帧。
     trace 非 None 时收到结构化诊断事件；默认关闭，不影响常规接收。
+    allow_scaled 由 desktop/video 入口启用，容忍播放器显示缩放；
+    原始 images 输入仍按像素几何严格校验。
     """
     run_started = time.perf_counter()
     trace_failed = False
@@ -189,7 +202,8 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
              dropped=stats.dropped, queue_depth=queue_depth)
 
     prefetched = (PrefetchedFrames(frames, maxsize=prefetch_size,
-                                   on_idle=on_stream_idle if trace is not None else None)
+                                   on_idle=on_stream_idle if trace is not None else None,
+                                   stop_check=stop_check)
                   if prefetch else None)
     stream = prefetched if prefetched is not None else frames
     if prefetched is not None:
@@ -198,7 +212,8 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
     # 崩溃 / Ctrl+C 重启后惰性加载已收帧，只补缺失帧
     store = FrameStore(paths.PROGRESS_DIR)
     timer = RestoreTimer()  # 还原计时（issue #25）：锚点 = 首个 is_new 数据帧落地
-    emit("receive_start", prefetch=prefetch, prefetch_size=prefetch_size)
+    emit("receive_start", prefetch=prefetch, prefetch_size=prefetch_size,
+         allow_scaled=allow_scaled)
 
     def fail(msg: str | None, *, stopped: bool = False) -> ReceiveResult:
         """统一未完成出口：失败原因 + 未完成统计（issue #25），退出码 1。"""
@@ -218,7 +233,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
         return result
 
     stopped = False
-    geo_cache = GeometryCache()  # 角标检测缓存（issue #30 C1）：会话内帧间几何不变
+    geo_cache = GeometryCache(allow_scaled=allow_scaled)  # 显示缩放仅由采集源显式启用
     last_candidate_at = None
     last_progress_pulse = run_started
     last_progress_label = None
@@ -237,6 +252,12 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                     try:
                         frame: DecodedFrame = decode_frame(img, geo_cache)
                     except FrameRejected as e:
+                        save_frame = getattr(trace, "save_rejected_frame", None)
+                        if save_frame is not None:
+                            try:
+                                save_frame(img, e.reason)
+                            except Exception:
+                                pass  # 诊断留样不得中断接收
                         emit("frame_rejected", stage="decode", reason=e.reason,
                              detail=e.detail, gap_ms=gap_ms,
                              duration_ms=round((time.perf_counter() - stage_started) * 1000, 3),
@@ -297,6 +318,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                         break
             except KeyboardInterrupt:
                 return fail("接收中断（Ctrl+C）：进度已持久化，重新运行将只补缺失帧")
+            stopped = stopped or (stop_check is not None and stop_check())
             reporter.finish()
     finally:
         if prefetched is not None:

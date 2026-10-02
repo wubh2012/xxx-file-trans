@@ -116,7 +116,7 @@ def summary_text(summary: dict) -> str:
         f"出片 {summary['out_size']} 字节\n"
         f"已保存到 {summary['output']}\n"
         f"下一步：人工上传到视频平台；对端下载后\n"
-        f"python -m receiver receive --source video --video <下载文件> --tape"
+        f"python -m receiver receive --source video --video <下载文件>"
     )
 
 

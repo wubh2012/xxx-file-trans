@@ -88,7 +88,7 @@ def test_summary_text_mentions_receive_command(tmp_path):
     summary = make_tape(src, out)
     text = summary_text(summary)
     assert "fileId" in text and str(out) in text
-    assert "--source video --video" in text and "--tape" in text
+    assert "--source video --video" in text and "--tape" not in text
 
 
 # ---------- MakeJob：真线程 + make_tape 往返（需 ffmpeg） ----------

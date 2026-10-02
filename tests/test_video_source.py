@@ -2,14 +2,13 @@
 
 测试用代码生成小体积合成视频（cv2.VideoWriter 写夹具 PNG 帧），不经
 真实屏幕与真实录制。编码器选 FFV1（无损）：编解码往返逐像素一致，
-夹具聚焦稳定闸门过滤与还原通路；噪点容错由噪点注入用例覆盖。
+夹具聚焦逐帧读取与还原通路；噪点容错由噪点注入用例覆盖。
 经 CLI 同一条 receive 通路断言还原结果（spec「desktop/video 通道：
 与 images 共用缝 B」）。
 """
 
 import argparse
 import gzip
-import os
 import zlib
 from pathlib import Path
 
@@ -21,6 +20,7 @@ import fixture_encoder
 from receiver.cli import main, receive_frames
 from receiver.pipeline import FrameRejected, decode_frame
 from receiver.sources.video import iter_video
+from receiver.sources.stable import StableFrameGate
 
 
 def _read_gray(p: Path) -> np.ndarray:
@@ -52,8 +52,7 @@ def _export_frames(tmp_path: Path, src: bytes, filename: str) -> list[Path]:
 # ---------- iter_video（真实 VideoCapture 解码）----------
 
 def test_iter_video_emits_each_frame_once(tmp_path):
-    """录制帧率高于发送帧率：每个传输帧在视频里重复多次，稳定闸门
-    （与 desktop 共用）过滤后各放行一次，名称按放行顺序连续编号。"""
+    """录屏中的重复画面也逐帧放行，名称按读取顺序连续编号。"""
     src = b"video roundtrip"
     paths = _export_frames(tmp_path, src, "vr.bin")
     imgs = [_read_gray(p) for p in paths]
@@ -61,12 +60,11 @@ def test_iter_video_emits_each_frame_once(tmp_path):
     _write_video(video, [im for im in imgs for _ in range(2)], fps=30.0)  # 每个传输帧连续重复 2 次
 
     names = [name for name, _ in iter_video(video)]
-    assert names == [f"video-{i:06d}" for i in range(1, len(paths) + 1)]
+    assert names == [f"video-{i:06d}" for i in range(1, len(imgs) * 2 + 1)]
 
 
-def test_iter_video_change_detection(tmp_path):
-    """重复捕获（录制帧率远高于发送帧率 / 循环重播片段）被变化检测
-    吞掉，不重复放行。"""
+def test_iter_video_preserves_repeated_frames(tmp_path):
+    """重复捕获全部保留，让下游按帧号去重，避免跳过有效的单次画面。"""
     src = b"change detection"
     paths = _export_frames(tmp_path, src, "cd.bin")
     imgs = [_read_gray(p) for p in paths]
@@ -74,12 +72,11 @@ def test_iter_video_change_detection(tmp_path):
     _write_video(video, [im for im in imgs for _ in range(4)], fps=30.0)
 
     names = [name for name, _ in iter_video(video)]
-    assert len(names) == len(paths)
+    assert len(names) == len(paths) * 4
 
 
-def test_iter_video_flushes_last_frame_at_end_of_stream(tmp_path):
-    """录制恰好在最后一个传输帧只出现一次时截尾：流末 flush 放行滞留
-    候选，末帧不静默丢失。"""
+def test_iter_video_preserves_single_trailing_frame(tmp_path):
+    """末帧只出现一次时仍正常读取，不需要稳定等待或流末补发。"""
     src = b"trailing frame"
     paths = _export_frames(tmp_path, src, "tf.bin")
     imgs = [_read_gray(p) for p in paths]
@@ -89,7 +86,7 @@ def test_iter_video_flushes_last_frame_at_end_of_stream(tmp_path):
                  fps=30.0)
 
     names = [name for name, _ in iter_video(video)]
-    assert names == [f"video-{i:06d}" for i in range(1, len(paths) + 1)]
+    assert names == [f"video-{i:06d}" for i in range(1, len(imgs) * 2)]
 
 
 # ---------- CLI 分派 ----------
@@ -122,12 +119,10 @@ def test_cli_video_dispatch_passes_video_path(monkeypatch):
 def _recording_with_noise(paths: list[Path], rng) -> list[np.ndarray]:
     """预录视频夹具（含噪点）：
 
-    1. 每个传输帧前插一次随机画面（录制时的过渡/干扰画面，不稳定 →
-       永不放行）；
-    2. 每个传输帧连续重复两次（录制帧率高于发送帧率）→ 稳定放行；
-    3. 第 2 个数据帧之后插入它的坏帧变体连续两帧（翻转 8×8 = 4 个
-       方块，损坏面积须超闸门伪影容差，否则被变化检测吞掉而非放行）
-       —— 闸门放行、CRC 整帧拒绝，不得污染已收好帧。
+    1. 每个传输帧前插一次随机画面（录制时的过渡/干扰画面，由流水线拒绝）；
+    2. 每个传输帧连续重复两次（录制帧率高于发送帧率）→ 按帧号去重；
+    3. 插入坏帧变体的两个副本，两帧均读取并由 CRC 拒绝，
+       不得污染已收好帧。
     """
     frames: list[np.ndarray] = []
     emitted = 0
@@ -146,13 +141,8 @@ def _recording_with_noise(paths: list[Path], rng) -> list[np.ndarray]:
 
 
 def test_video_channel_restore_with_noise(tmp_path):
-    """video 通路集成：含噪点预录视频 → 稳定闸门 → CLI 还原，字节一致。
-
-    固化「闸门放行 → CRC 拒绝」路径（issue #16）：坏帧变体损坏面积超
-    闸门伪影容差被放行，CRC 整帧拒绝——断言闸门放行帧中恰有 1 帧因
-    CRC 被拒。若坏帧构造回归到低于容差（如 4×4），会被变化检测吞掉、
-    放行帧全部解码成功，此断言随即失败。"""
-    src = os.urandom(1200)
+    """逐帧读取含过渡噪声和重复坏帧的录屏，协议校验拒绝坏帧，最终字节一致。"""
+    src = np.random.default_rng(42).bytes(1200)
     paths = _export_frames(tmp_path, src, "noisy.bin")
     rng = np.random.default_rng(42)
     video = tmp_path / "recording.avi"
@@ -162,7 +152,7 @@ def test_video_channel_restore_with_noise(tmp_path):
     args = argparse.Namespace(source="video", dir=None,
                               video=video, region=None, out=out)
 
-    passed: list[tuple[str, np.ndarray]] = []  # 闸门放行帧（receive 主循环的输入）
+    passed: list[tuple[str, np.ndarray]] = []  # 全部读取帧（receive 主循环的输入）
 
     def record_passed():
         for name, img in iter_video(video):
@@ -176,14 +166,14 @@ def test_video_channel_restore_with_noise(tmp_path):
     assert len(files) == 1 and files[0].name == "noisy.bin"
     assert files[0].read_bytes() == src
 
-    # 恰有 1 帧（坏帧变体）被 CRC 整帧拒绝，好帧全部解码成功
+    # 两个坏帧副本均被 CRC 拒绝，过渡噪声也由流水线拒绝
     reasons = []
     for _, img in passed:
         try:
             decode_frame(img)
         except FrameRejected as e:
             reasons.append(e.reason)
-    assert reasons == ["crc"], f"闸门放行帧应恰有 1 帧 CRC 拒绝，实际 {reasons}"
+    assert reasons.count("crc") == 2, f"两个坏帧副本应均被 CRC 拒绝，实际 {reasons}"
 
 
 # ---------- 输入错误 ----------
@@ -202,10 +192,21 @@ def test_cli_video_unopenable_file_exits_2(tmp_path):
 
 # ---------- 片模式（issue #45）：旁路稳定闸门逐帧直读 ----------
 
+def test_video_single_frame_per_payload_restores_without_tape_flag(tmp_path):
+    """不勾选片模式也必须保留每个传输帧，不能把有限视频当作实时采集流。"""
+    src = np.random.default_rng(20261002).bytes(1200)
+    paths = _export_frames(tmp_path, src, "single.bin")
+    video = tmp_path / "single.avi"
+    _write_video(video, [_read_gray(p) for p in paths])
+    out = tmp_path / "output"
+    args = argparse.Namespace(source="video", out=out)
+
+    assert receive_frames(args, iter_video(video, tape=False)) == 0
+    assert (out / "single.bin").read_bytes() == src
+
+
 def test_iter_video_tape_mode_emits_every_decoded_frame(tmp_path):
-    """片模式：制片 MP4（ADR-0003）每个传输帧恰出现一次，相邻帧内容全部
-    不同，「稳定两帧」判定永不满足——片模式旁路闸门逐帧直读，帧不滞留、
-    不靠超时兜底。对照：默认闸门路径对同一视频放不出全部帧。"""
+    """旧 tape 开关两种取值均逐帧放行；原稳定闸门无法处理单次画面。"""
     src = b"tape mode"
     paths = _export_frames(tmp_path, src, "tp.bin")
     imgs = [_read_gray(p) for p in paths]
@@ -216,11 +217,14 @@ def test_iter_video_tape_mode_emits_every_decoded_frame(tmp_path):
     assert names == [f"video-{i:06d}" for i in range(1, len(paths) + 1)]
 
     default_names = [name for name, _ in iter_video(video)]
-    assert len(default_names) < len(paths), "默认闸门路径应卡住全部新画面（对照）"
+    assert default_names == names
+    gate = StableFrameGate()
+    gated = [gate.feed(img, now=i / 30) for i, img in enumerate(imgs)]
+    assert sum(img is not None for img in gated) == 0
 
 
 def test_cli_video_tape_flag_passed_through(monkeypatch):
-    """CLI 分派：--tape 透传 iter_video 的 tape 参数（缺省 False 不变）。"""
+    """CLI 分派：--tape 透传 iter_video 的 tape 参数（保留旧参数兼容）。"""
     import receiver.cli as cli
 
     seen = {}

@@ -77,6 +77,9 @@ class MeasuredGeometry:
     cols: int
     rows: int
     side: int  # 角标边长实测值（px；calibrate 探针用于边长残差统计，#11）
+    # 播放器缩放时，逻辑 BIT 仍取帧头值，显示格距由角标矩形标定。
+    pitch_x: float | None = None
+    pitch_y: float | None = None
 
 
 def parse_header(header: bytes) -> FrameHeader:
@@ -151,7 +154,7 @@ def _aligned_row_pairs(cands: list[tuple[int, int, int, int]], side: int
     return pairs
 
 
-def _outermost_quadruple(cands: list[tuple[int, int, int, int]]) -> _Quad | None:
+def _outermost_quadruple(cands: list[tuple[int, int, int, int]], *, scaled=False) -> _Quad | None:
     """满足矩形约束的角标四元组搜索，取覆盖范围最大者（外沿者即真解）。
 
     真角标内角四点构成轴对齐严格矩形（ADR-0001）：上下边各自同 top
@@ -175,7 +178,7 @@ def _outermost_quadruple(cands: list[tuple[int, int, int, int]]) -> _Quad | None
         row_pairs = _aligned_row_pairs(boxes, side)
         for (left, right), top_tops in row_pairs.items():
             gw = right - left - side
-            if not _grid_dim_ok(gw, bit):
+            if not (0 < gw <= (side + 1) * 255 / 3 if scaled else _grid_dim_ok(gw, bit)):
                 continue
             # 下边对与上边对按 left/right 对齐（±容差）配对成四元组
             for dtl in tols:
@@ -183,7 +186,7 @@ def _outermost_quadruple(cands: list[tuple[int, int, int, int]]) -> _Quad | None
                     for bot_top in row_pairs.get((left + dtl, right + dtr), ()):
                         for top_top in top_tops:
                             gh = bot_top - top_top - side
-                            if not _grid_dim_ok(gh, bit):
+                            if not (0 < gh <= (side + 1) * 255 / 3 if scaled else _grid_dim_ok(gh, bit)):
                                 continue
                             if best is None or gw * gh > best.area:
                                 best = _Quad(gw * gh, side, (left + side, top_top + side, right, bot_top))
@@ -265,12 +268,103 @@ def _sample_grid(bw: np.ndarray, geo: MeasuredGeometry, rect: tuple[int, int, in
     gather（O(格心×k²)），不再对整图做 boxFilter（O(像素)）；窗口起点钳制
     到图像边界，与原 BORDER_REPLICATE 等价。
     """
+    if geo.pitch_x is not None:
+        x0, y0, _, _ = rect
+        xs = x0 + (np.arange(geo.cols) + 0.5) * geo.pitch_x
+        ys = y0 + (np.arange(geo.rows) + 0.5) * geo.pitch_y
+        return _sample_centers(bw, xs[None, :], ys[:, None],
+                               min(geo.pitch_x, geo.pitch_y))
     k, rows_sel, cols_sel = _sample_indices(geo.rows, geo.cols, geo.bit, rect, bw.shape)
     win = np.lib.stride_tricks.sliding_window_view(bw, (k, k))  # (H-k+1, W-k+1, k, k) 视图
     window = win[rows_sel[:, None], cols_sel[None, :]]  # → (rows, cols, k, k)
     mean = window.mean(axis=(2, 3))  # 白色占比（0–255）
     bits = (mean < 128).astype(np.uint8)  # 暗多数 = 黑块 = 1
     return np.packbits(bits.flatten(), bitorder="big").tobytes()
+
+
+def _sample_centers(bw, xs, ys, pitch):
+    """非整数格距按格心采样，邻域限制在方块内部，避免缩放边缘混色。"""
+    xs = np.floor(xs).astype(int)
+    ys = np.floor(ys).astype(int)
+    radius = 1 if pitch >= 5 else 0
+    values = sum(bw[np.clip(ys + dy, 0, bw.shape[0] - 1),
+                    np.clip(xs + dx, 0, bw.shape[1] - 1)].astype(np.uint16)
+                 for dy in range(-radius, radius + 1)
+                 for dx in range(-radius, radius + 1))
+    bits = values < 128 * (2 * radius + 1) ** 2
+    return np.packbits(bits.flatten(), bitorder="big").tobytes()
+
+
+def _decode_scaled(bw, *, marker_mask=None):
+    """从缩放角标估计有限 COLS 候选，帧头交叉验证后再用完整 CRC 仲裁。"""
+    n, _, stats, _ = cv2.connectedComponentsWithStats(
+        bw if marker_mask is None else marker_mask, connectivity=4)
+    candidates = []
+    for left, top, w, h, area in stats[1:n]:
+        if min(w, h) >= 3 and abs(w - h) <= 1 and area >= 0.9 * w * h:
+            side = int(round((w + h) / 2))
+            candidates.append((int(left), int(top), side, side))
+    quad = _outermost_quadruple(candidates, scaled=True)
+    if quad is None:
+        raise FrameRejected("geometry", "未检测到完整的缩放角标矩形")
+    x0, y0, x1, y1 = quad.rect
+    gw, gh = x1 - x0, y1 - y0
+    # 角标宽度最多有一像素量化误差，搜索范围由该误差界定。
+    low = max(1, int(gw * 3 / (quad.side + 1)) - 1)
+    high = min(255, int(np.ceil(gw * 3 / max(1, quad.side - 1))) + 1)
+    indices = np.arange(HEADER_BYTES * 8)
+    for cols in range(low, high + 1):
+        pitch_x = gw / cols
+        header_bytes = _sample_centers(
+            bw, x0 + (indices % cols + 0.5) * pitch_x,
+            y0 + (indices // cols + 0.5) * pitch_x, pitch_x)
+        try:
+            h = parse_header(header_bytes)
+        except FrameRejected:
+            continue
+        if h.cols != cols or h.rows == 0 or h.bit == 0 or h.pad < 3:
+            continue
+        pitch_y = gh / h.rows
+        if (abs(3 * pitch_x - quad.side) > 1.5
+                or abs(3 * pitch_y - quad.side) > 1.5
+                or abs(pitch_x - pitch_y) > 0.15 * pitch_x):
+            continue
+        geo = MeasuredGeometry(h.bit, h.pad, cols, h.rows, quad.side,
+                               pitch_x, pitch_y)
+        return _decode_grid(bw, geo, quad.rect), geo, quad.rect
+    raise FrameRejected("geometry", "缩放网格候选未通过帧头验证")
+
+
+def _decode_display(bw):
+    """隔离黑色视频画布，避免外围白边粘连角标；数据始终从原图采样。"""
+    try:
+        return _decode_scaled(bw)
+    except FrameRejected as initial:
+        if initial.reason == "crc":
+            raise
+        best_error = initial
+    # 视频黑边通常是最大的黑色连通域，其外接框包含四角及全部网格。
+    # 最多检查三个候选；候选裁切只能帮助定位，帧头及 CRC 不可省略。
+    n, _, stats, _ = cv2.connectedComponentsWithStats(255 - bw, connectivity=4)
+    boxes = sorted(stats[1:n], key=lambda box: int(box[4]), reverse=True)[:3]
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    for left, top, width, height, _ in boxes:
+        if width < 32 or height < 32:
+            continue
+        canvas = bw[top:top + height, left:left + width]
+        # 开运算只用于角标定位，去掉压缩/缩放产生的单像素连接线。
+        # 原始数据块即使有细节变化，也仍须在未处理的 canvas 上通过 CRC。
+        markers = cv2.morphologyEx(canvas, cv2.MORPH_OPEN, kernel)
+        try:
+            frame, geo, rect = _decode_scaled(canvas, marker_mask=markers)
+        except FrameRejected as error:
+            if error.reason == "crc":
+                best_error = error
+            continue
+        x0, y0, x1, y1 = rect
+        return frame, geo, (int(x0 + left), int(y0 + top),
+                            int(x1 + left), int(y1 + top))
+    raise best_error
 
 
 @dataclass
@@ -285,6 +379,7 @@ class GeometryCache:
     全量检测并刷新缓存；误命中由帧头交叉校验 + CRC 兜底（整帧拒绝）。
     """
 
+    allow_scaled: bool = False
     _shape: tuple[int, int] | None = None
     _geo: MeasuredGeometry | None = None
     _rect: tuple[int, int, int, int] | None = None
@@ -336,11 +431,24 @@ def decode_frame(img: np.ndarray, geo_cache: GeometryCache | None = None) -> Dec
             pass
     _, bw = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-    if geo_cache is not None:
-        geo, rect = geo_cache.measure(bw)
-    else:
-        geo, rect = bootstrap_geometry(bw)
-    frame = _decode_grid(bw, geo, rect)
+    try:
+        if geo_cache is not None:
+            geo, rect = geo_cache.measure(bw)
+        else:
+            geo, rect = bootstrap_geometry(bw)
+        frame = _decode_grid(bw, geo, rect)
+    except FrameRejected as original:
+        if (geo_cache is None or not geo_cache.allow_scaled
+                or original.reason not in ("geometry", "sync", "ver")):
+            raise
+        try:
+            frame, geo, rect = _decode_display(bw)
+        except FrameRejected as scaled:
+            if scaled.reason == "geometry":
+                raise original
+            raise
+        geo_cache._shape = bw.shape
+        geo_cache._geo, geo_cache._rect = geo, rect
     if geo_cache is not None:
         geo_cache._validated = True
     return frame

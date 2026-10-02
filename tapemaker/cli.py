@@ -113,7 +113,7 @@ def cmd_make(args: argparse.Namespace) -> int:
     print(
         f"已出片：{summary['output']}（{summary['out_size']} 字节，"
         f"{time.monotonic() - t0:.1f}s）\n"
-        f"接收：上传视频平台后下载，python -m receiver receive --source video --video <下载文件> --tape"
+        f"接收：上传视频平台后下载，python -m receiver receive --source video --video <下载文件>"
     )
     return 0
 

@@ -47,6 +47,14 @@ from tkinter import filedialog, messagebox, ttk
 
 POLL_MS = 80  # 事件队列轮询周期（GUI 刷新粒度，含耗时计时器走秒）
 CLOSE_TIMEOUT_S = 10  # 关窗确认后等 worker 收尾的宽限，超时强制退出
+CAPTURE_HELP = {
+    "auto": "自动选择：Windows 优先使用 DXGI，不可用时使用 MSS；"
+            "DXGI 运行中恢复失败也会回退到 MSS。一般可先选此项。",
+    "mss": "通用抓屏：兼容性较好，支持多显示器及跨屏区域，CPU 占用通常较高。"
+           "B 站播放或 DXGI 采集异常时建议选此项。",
+    "dxgi": "Windows 高效抓屏：通常 CPU 占用较低，适合高帧率接收。"
+            "当前支持主显示器内的区域；多屏或跨屏采集建议选 MSS。",
+}
 
 
 class ReceiverGui:
@@ -61,6 +69,7 @@ class ReceiverGui:
         self.events: queue.Queue | None = None
         self._closing = False  # 关窗确认后等 done 事件再销毁
         self._close_at = 0.0  # 关窗确认时刻（宽限计时起点）
+        self._stopping = False
         self._notifier = default_notifier()
         self.trace_path: Path | None = None
 
@@ -89,9 +98,9 @@ class ReceiverGui:
         # 各源参数帧（叠放，按源切换可见性）
         self._param_frames = {}
         self.region_var = tk.StringVar()
+        self.capture_var = tk.StringVar(value="auto")
         self.dir_var = tk.StringVar()
         self.video_var = tk.StringVar()
-        self.tape_var = tk.BooleanVar(value=False)   # video 源带模式（issue #45）
 
         desktop = ttk.Frame(setup)
         ttk.Label(desktop, text="采集区域：").grid(row=0, column=0, sticky="w")
@@ -103,6 +112,14 @@ class ReceiverGui:
                                "窗口播放建议「框选…」圈住画面）。L,T,W,H 为物理像素").grid(
             row=1, column=1, columnspan=2, sticky="w", pady=(2, 0))
         desktop.columnconfigure(1, weight=1)
+        ttk.Label(desktop, text="采集后端：").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Combobox(desktop, textvariable=self.capture_var, values=("auto", "mss", "dxgi"),
+                     state="readonly", width=10).grid(row=2, column=1, sticky="w", padx=4)
+        self.capture_help_var = tk.StringVar(value=CAPTURE_HELP[self.capture_var.get()])
+        ttk.Label(desktop, textvariable=self.capture_help_var, foreground="#555555",
+                  wraplength=520, justify="left").grid(
+            row=3, column=1, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        self.capture_var.trace_add("write", lambda *_: self._on_capture_change())
         self._param_frames["desktop"] = desktop
 
         images = ttk.Frame(setup)
@@ -119,8 +136,6 @@ class ReceiverGui:
         ttk.Entry(video, textvariable=self.video_var, width=44).grid(row=0, column=1, padx=4)
         ttk.Button(video, text="浏览…",
                    command=self._browse_video).grid(row=0, column=2)
-        ttk.Checkbutton(video, text="带模式（tapemaker 制带）", variable=self.tape_var,
-                        command=self._update_command).grid(row=0, column=3, padx=(8, 0))
         self.video_var.trace_add("write", lambda *_: self._update_command())
         video.columnconfigure(1, weight=1)
         self._param_frames["video"] = video
@@ -162,7 +177,8 @@ class ReceiverGui:
         row.pack(fill="x")
         self.status_var = tk.StringVar(value="待机")
         ttk.Label(row, textvariable=self.status_var,
-                  font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+                  font=("Microsoft YaHei UI", 10, "bold"),
+                  wraplength=450, justify="left").pack(side="left")
         self.stop_btn = ttk.Button(row, text="停止", command=self._stop,
                                    state="disabled")
         self.stop_btn.pack(side="right")
@@ -178,6 +194,10 @@ class ReceiverGui:
     def _on_source_change(self):
         self._select_source(self.source_var.get())
 
+    def _on_capture_change(self):
+        self.capture_help_var.set(CAPTURE_HELP.get(self.capture_var.get(), ""))
+        self._update_command()
+
     def _select_source(self, source: str):
         self.source_var.set(source)
         for name, frame in self._param_frames.items():
@@ -190,8 +210,8 @@ class ReceiverGui:
             "desktop": "先在发送端开始播放（窗口播放模式），再点「开始接收」；"
                        "框选只需完整包含帧画布并留边，无需像素级精确。",
             "images": "选择发送端导出的 PNG 帧序列目录（frames_png 布局）。",
-            "video": "选择发送端画面的预录屏幕视频文件；tapemaker 制带的 MP4（"
-                     "每个传输帧只出现一次）勾选「带模式」。",
+            "video": "选择录屏或 tapemaker 制片视频，自动逐帧解析；"
+                     "从视频平台下载的文件也使用同一方式。",
         }[source])
         self._update_command()
 
@@ -212,7 +232,7 @@ class ReceiverGui:
         self.command_var.set(build_command(
             source, frames_dir=self.dir_var.get() or None,
             video=self.video_var.get() or None, region=region,
-            tape=self.tape_var.get()))
+            capture=self.capture_var.get()))
 
     def _region_or_none(self) -> dict | None:
         """区域输入 → mss region dict；留空 = 整屏；格式非法抛 ValueError。"""
@@ -290,12 +310,12 @@ class ReceiverGui:
             return
 
         source_params = {"frames_dir": dir_text, "video": video_text, "region": region,
-                         "tape": self.tape_var.get()}
+                         "capture": self.capture_var.get()}
         trace_path = DEBUG_DIR / (
             f"receive_{datetime.now().astimezone().strftime('%Y%m%dT%H%M%S')}_"
             f"{time.time_ns() % 1_000_000_000:09d}.jsonl")
         try:
-            trace = JsonlTraceWriter(trace_path)
+            trace = JsonlTraceWriter(trace_path, save_rejected_frames=(source == "desktop"))
         except OSError as e:
             messagebox.showerror(
                 "无法创建诊断日志",
@@ -308,7 +328,7 @@ class ReceiverGui:
                 "event": "gui_session_start",
                 "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
                 "source": source,
-                "capture_requested": "auto" if source == "desktop" else None,
+                "capture_requested": self.capture_var.get() if source == "desktop" else None,
                 "region": region,
                 "frozen_exe": bool(getattr(sys, "frozen", False)),
             })
@@ -324,11 +344,13 @@ class ReceiverGui:
                 self.events.put(("capture_ready",))
 
         self.model = ProgressModel()
+        self._stopping = False
         self.events = queue.Queue()
         self.job = ReceiveJob(lambda: make_frames(
                                   source, **source_params, on_backend=on_backend),
                               OUTPUT_DIR, self.events, notify=self._notifier,
-                              prefetch=(source == "desktop"), trace=trace)
+                              prefetch=(source == "desktop"), trace=trace,
+                              allow_scaled=source in ("desktop", "video"))
         self.result_var.set("")
         self.result_label.pack_forget()
         self._set_setup_state("disabled")
@@ -345,6 +367,8 @@ class ReceiverGui:
                 parent=self.root):
             return
         self.job.stop()
+        self._stopping = True
+        self.model.stop()
         self.stop_btn.config(state="disabled")
         self.status_var.set("正在停止…")
 
@@ -363,7 +387,8 @@ class ReceiverGui:
                     self.model.on_event(ev)
             except queue.Empty:
                 pass
-            self.status_var.set(self.model.summary_line())
+            self.status_var.set(("正在停止… · " if self._stopping else "")
+                                + self.model.summary_line())
         self.root.after(POLL_MS, self._poll)
 
     def _on_done(self, result):
@@ -417,6 +442,9 @@ class ReceiverGui:
                     parent=self.root):
                 return
             self.job.stop()
+            self._stopping = True
+            self.model.stop()
+            self.stop_btn.config(state="disabled")
             self._closing = True  # done 事件到达后销毁（worker 落盘收尾不被打断）
             self._close_at = time.monotonic()
             return

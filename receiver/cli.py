@@ -41,7 +41,8 @@ def receive_frames(args, frames, notify=None, *, prefetch: bool = False) -> int:
     notify(title, message) 报喜，失败路径不调用；None 时不通知
     （真实默认实现见 receiver.notify）。"""
     result = run_receive(frames, Path(args.out), notify=notify,
-                         prefetch=prefetch)
+                         prefetch=prefetch,
+                         allow_scaled=getattr(args, "source", None) in ("desktop", "video"))
     if result.error:
         print(result.error, file=sys.stderr)
     if result.incomplete:
@@ -89,8 +90,7 @@ def _add_source_args(p) -> None:
     p.add_argument("--dir", type=Path, help="images 源：PNG 帧序列目录")
     p.add_argument("--video", type=Path, help="video 源：录制视频文件")
     p.add_argument("--tape", action="store_true",
-                   help="video 源片模式（issue #45）：制片 MP4（tapemaker 出片）每传输帧"
-                        "恰出现一次，旁路稳定闸门逐帧直读")
+                   help="兼容旧命令；video 源现在默认逐帧解析，无需指定")
     p.add_argument("--region", help="desktop 源：捕获区域 L,T,W,H，或 pick 冻屏框选")
     p.add_argument("--capture", choices=["auto", "mss", "dxgi"], default="auto",
                    help="desktop 源采集后端：auto 在 Windows 优先 DXGI、不可用时回退 mss；"
