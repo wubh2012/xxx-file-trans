@@ -25,11 +25,14 @@ from pathlib import Path
 
 from receiver.metadata import FileMetadata
 from receiver.fec import recover_one, recover_one_weighted, recover_two
+from receiver.fountain import FountainBlock, coefficient_mask, repair_coordinates
 from receiver.pipeline import DecodedFrame, FrameHeader
 from receiver.protocol import (
     FEC_GROUP_SIZE,
     FEC_PARITY_FRAMES,
     FLAGS_FEC,
+    FLAGS_FOUNTAIN,
+    FLAGS_REPAIR,
     FRAME_NO_METADATA,
     FrameRejected,
 )
@@ -71,6 +74,9 @@ class FrameStore:
         self._data_file = None
         self._bitmap_file = None
         self._fec_parity: dict[tuple[int, int], bytes] = {}
+        self.fountain = False
+        self._fountain_blocks: dict[int, FountainBlock] = {}
+        self._metadata_fountain = False
         self._metadata_file_id: int | None = None  # 元数据帧所属 fileId（防异帧毒化）
         # 公共出口（区别于 _ 前缀的内部状态）：非致命告警（meta 落盘降级等）
         # 由此汇入 ReceiveResult.warnings，经 CLI / GUI 统一渲染，不打印到 stdout
@@ -88,7 +94,16 @@ class FrameStore:
                 self._validate_against_lock(h)  # 已锁定 → 元数据帧同受硬锁约束
             self.metadata = frame.metadata  # decode_frame 已保证元数据帧携带合法元数据
             self._metadata_file_id = h.file_id
+            self._metadata_fountain = bool(h.flags & FLAGS_FOUNTAIN)
             self._write_meta()
+            return False
+        if h.flags & FLAGS_REPAIR:
+            if self.file_id is None:
+                self._lock(h)
+            self._validate_against_lock(h)
+            group, _serial = repair_coordinates(h.frame_no, h.total_frames)
+            count = min(FEC_GROUP_SIZE, h.total_frames - group * FEC_GROUP_SIZE)
+            self._fountain_add(group, coefficient_mask(h.file_id, h.frame_no, count), frame.payload)
             return False
         if h.flags & FLAGS_FEC:
             if self.file_id is None:
@@ -110,7 +125,11 @@ class FrameStore:
         self._persist_frame(h.frame_no, frame.payload)
         self._frames[h.frame_no] = frame.payload
         # 校验帧可能先于数据帧到达；每个新数据帧落地后都重新尝试本组恢复。
-        self._recover_group(h.frame_no // FEC_GROUP_SIZE)
+        if self.fountain:
+            self._fountain_add(h.frame_no // FEC_GROUP_SIZE,
+                               1 << (h.frame_no % FEC_GROUP_SIZE), frame.payload)
+        else:
+            self._recover_group(h.frame_no // FEC_GROUP_SIZE)
         return True
 
     # ---------- 锁定与持久化 ----------
@@ -123,6 +142,7 @@ class FrameStore:
         """
         if self.task_root is None:
             self._adopt_lock(h)
+            self._adopt_metadata_for(h)
             return
         self.task_dir = self.task_root / f"{h.file_id:08X}"
         if (self.task_dir / "meta.json").is_file():
@@ -146,11 +166,13 @@ class FrameStore:
         self.total_frames = h.total_frames
         self.chunk_size = h.chunk_size
         self.cols, self.rows, self.bit, self.pad = h.cols, h.rows, h.bit, h.pad
+        self.fountain = bool(h.flags & FLAGS_FOUNTAIN)
 
     def _adopt_metadata_for(self, h: FrameHeader) -> None:
         """锁定时裁决先到的元数据帧：仅同 fileId 者随任务落 meta.json，
         异 fileId 元数据丢弃（防毒化新任务的落盘文件名 / 还原长度）。"""
-        if self.metadata is not None and self._metadata_file_id != h.file_id:
+        if self.metadata is not None and (self._metadata_file_id != h.file_id
+                or self._metadata_fountain != self.fountain):
             self.metadata = None
             self._metadata_file_id = None
 
@@ -185,6 +207,7 @@ class FrameStore:
         self.chunk_size = chunk
         self.cols, self.rows = meta["cols"], meta["rows"]
         self.bit, self.pad = meta["bit"], meta["pad"]
+        self.fountain = meta.get("fountain", False)
         if meta.get("metadata"):
             m = meta["metadata"]
             self.metadata = FileMetadata(
@@ -192,6 +215,7 @@ class FrameStore:
                 compressed_size=m["compressed_size"], name=m["name"],
             )
             self._metadata_file_id = self.file_id
+            self._metadata_fountain = self.fountain
         self._bitmap = bytearray(raw_bitmap)
         self._data_file = open(data_path, "r+b")
         self._bitmap_file = open(recv_path, "r+b")
@@ -208,6 +232,8 @@ class FrameStore:
                 f" 与已收任务 0x{self.file_id:08X}（total={self.total_frames}, chunk={self.chunk_size}）不一致",
             )
         mismatch = []
+        if bool(h.flags & FLAGS_FOUNTAIN) != self.fountain:
+            mismatch.append("喷泉码模式与锁定值不一致")
         if h.total_frames != self.total_frames:
             mismatch.append(f"TOTAL_FRAMES {h.total_frames} ≠ 锁定 {self.total_frames}")
         if h.chunk_size != self.chunk_size:
@@ -242,6 +268,27 @@ class FrameStore:
         self._bitmap_file.seek(byte_index)
         self._bitmap_file.write(bytes((self._bitmap[byte_index],)))
         self._bitmap_file.flush()
+
+    def _fountain_add(self, group: int, mask: int, payload: bytes) -> None:
+        start = group * FEC_GROUP_SIZE
+        count = min(FEC_GROUP_SIZE, self.total_frames - start)
+        if all(n in self._frames for n in range(start, start + count)):
+            self._fountain_blocks.pop(group, None)
+            return
+        block = self._fountain_blocks.get(group)
+        if block is None:
+            block = FountainBlock(count, self.chunk_size)
+            self._fountain_blocks[group] = block
+            for i in range(count):
+                if start + i in self._frames:
+                    block.add(1 << i, self._frames[start + i])
+        for relative, recovered in block.add(mask, payload):
+            n = start + relative
+            if n not in self._frames:
+                self._persist_frame(n, recovered)
+                self._frames[n] = recovered
+        if all(n in self._frames for n in range(start, start + count)):
+            self._fountain_blocks.pop(group, None)
 
     def _recover_group(self, group: int) -> None:
         """用已收到的校验帧恢复同组最多两个缺失数据帧。"""
@@ -304,6 +351,7 @@ class FrameStore:
             "rows": self.rows,
             "bit": self.bit,
             "pad": self.pad,
+            "fountain": self.fountain,
             "metadata": None if self.metadata is None else {
                 "method": self.metadata.method,
                 "plain_size": self.metadata.plain_size,

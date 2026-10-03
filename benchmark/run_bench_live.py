@@ -366,7 +366,9 @@ def load_and_play(page, path: Path, fps: int,
         status = page.text_content("#status") or ""
         print(f"  [warn] 载入未进入播放态（status={status!r}），整页重载重试",
               flush=True)
+    coding = page.locator("#coding").input_value()
     page.reload()
+    page.select_option("#coding", coding)
     page.wait_for_selector("#modeWindow", timeout=10000)
     page.click("#modeWindow")
     page.fill("#bit", str(bit_css))
@@ -384,6 +386,8 @@ def main() -> int:
                     help="冒烟：1MiB × FPS {30,60} × 1 次接收 × 1 轮校准")
     ap.add_argument("--capture", choices=["mss", "dxgi"], default="mss",
                     help="desktop 采集后端（B2 复测用 dxgi；默认 mss 与 v2 报告同口径）")
+    ap.add_argument("--coding", choices=["fec", "fountain"], default="fec",
+                    help="对比固定 FEC 与实验喷泉码；喷泉码请搭配 --skip-calibration")
     ap.add_argument("--input", type=Path,
                     help="真实文件路径；指定后所有档位/rep 使用同一文件并校验 SHA-256")
     ap.add_argument("--bit-css", type=int, default=BIT_CSS,
@@ -431,6 +435,8 @@ def main() -> int:
             ap.error(f"--input 文件不存在：{args.input}")
     capture = args.capture
     suffix = "" if capture == "mss" else f"_{capture}"
+    if args.coding == "fountain" and not args.run_label:
+        suffix += "_fountain"
     if args.run_label:
         if not all(c.isalnum() or c in "-_" for c in args.run_label):
             ap.error("--run-label 只允许字母、数字、短横线和下划线")
@@ -495,6 +501,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         ctx = browser.new_context(no_viewport=True)
         page = ctx.new_page()
         page.goto(sender_uri)
+        page.select_option("#coding", args.coding)
         page.click("#modeWindow")
         page.fill("#bit", str(args.bit_css))
         page.fill("#pad", str(args.pad))
@@ -578,6 +585,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                                   f"receive_{capture}_{fps}_{rep}_"
                                   f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.jsonl")
                     trace_metadata = {
+                        "coding": args.coding,
                         "mode": "window-playback-desktop",
                         "capture": capture,
                         "fps": fps,
@@ -663,6 +671,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         "mode": "live-desktop",
         "playback_order": "interleaved", "interleave_depth": 64,
         "capture": capture,
+        "coding": args.coding,
         "input": str(args.input) if args.input is not None else None,
         "input_bytes": len(fixed_raw) if fixed_raw is not None else None,
         "input_sha256": fixed_sha,

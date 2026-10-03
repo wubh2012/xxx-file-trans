@@ -26,10 +26,13 @@ from receiver.metadata import FileMetadata, parse_metadata
 from receiver.protocol import (
     FLAGS_ALLOWED,
     FLAGS_FEC,
+    FLAGS_FOUNTAIN,
+    FLAGS_REPAIR,
     FRAME_NO_METADATA,
     HEADER_BYTES,
     SYNC,
     VER,
+    VER_FOUNTAIN,
     FrameRejected,
     fec_parity_count,
     is_fec_frame,
@@ -87,8 +90,13 @@ def parse_header(header: bytes) -> FrameHeader:
     sync = int.from_bytes(header[0:2], "big")
     if sync != SYNC:
         raise FrameRejected("sync", f"期望 0x{SYNC:04X}，实际 0x{sync:04X}")
-    if header[2] != VER:
+    if header[2] not in (VER, VER_FOUNTAIN):
         raise FrameRejected("ver", f"期望 0x{VER:02X}，实际 0x{header[2]:02X}")
+    flags = int.from_bytes(header[20:22], "big")
+    if header[2] == VER and flags & (FLAGS_FOUNTAIN | FLAGS_REPAIR):
+        raise FrameRejected("flags", "v1 不接受喷泉码标志")
+    if header[2] == VER_FOUNTAIN and (not flags & FLAGS_FOUNTAIN or flags & FLAGS_FEC):
+        raise FrameRejected("flags", "v2 必须标记喷泉码且不能混用固定 FEC")
     return FrameHeader(
         file_id=int.from_bytes(header[3:7], "big"),
         frame_no=int.from_bytes(header[7:10], "big"),
@@ -480,7 +488,12 @@ def _decode_grid(bw, geo, rect):
     if h.data_len > capacity:
         raise FrameRejected("data_len", f"DATA_LEN={h.data_len} 超出网格容量 {capacity}")
     is_fec = bool(h.flags & FLAGS_FEC)
-    if is_fec:
+    if h.flags & FLAGS_REPAIR:
+        if not h.total_frames or not h.total_frames <= h.frame_no < FRAME_NO_METADATA:
+            raise FrameRejected("frame_no", "喷泉码修复帧号越界")
+        if h.data_len != h.chunk_size:
+            raise FrameRejected("data_len", "修复帧必须携带完整 CHUNK_SIZE")
+    elif is_fec:
         if not is_fec_frame(h.frame_no, h.total_frames):
             raise FrameRejected(
                 "frame_no",

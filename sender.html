@@ -134,6 +134,8 @@
         <label title="每秒播放的帧数。越高传输越快（总耗时 ≈ 总帧数 ÷ FPS），但受屏幕刷新率与摄像头快门限制，过高会导致拍摄糊帧、丢帧重传（单向信道丢一帧＝等整个循环重播）。camera 拍摄建议保守；desktop 抓屏（DXGI）实测安全上限 30fps（benchmark 实测 45+ 缺帧收不齐），建议 15–20">FPS <input id="fps" type="number" min="1" max="60" value="15"></label>
         <span id="fpsWarn" class="hint" hidden>⚠ FPS &gt; 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
       </p>
+      <p><label>纠错模式 <select id="coding"><option value="fec">固定 FEC（默认）</option><option value="fountain">喷泉码（实验 v2）</option></select></label></p>
+      <p id="codingHint" class="hint" hidden>首轮发送原始数据，随后持续发送新修复帧；请等接收端确认还原后停止。需使用本分支接收端。</p>
       <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
     </fieldset>
     <fieldset>
@@ -236,6 +238,7 @@ const state = {
   compBuf: null, compSize: 0,
   geo: null,          // { BIT, PAD, COLS, ROWS, FPS, chunkSize }
   totalFrames: 0,
+  coding: 'fec',
   playing: false,
   mode: 'desktop',       // 当前发送模式：desktop=屏幕播放 / images=导出 PNG（决定复制按钮的接收端命令）
   playMode: 'fullscreen', // 播放模式（issue #21）：fullscreen=全屏（camera 拍摄）/ window=窗口（desktop 抓屏）
@@ -301,7 +304,7 @@ function buildHeader(frameNo, data, flags = 0x8000) {
   const h = new Uint8Array(26);
   const dv = new DataView(h.buffer);
   h[0] = 0xF0; h[1] = 0xA5;                       // SYNC（不参与 CRC）
-  h[2] = 0x01;                                    // VER
+  h[2] = state.coding === 'fountain' ? 0x02 : 0x01;
   dv.setUint32(3, state.fileId);                  // FILE_ID
   h[7] = (frameNo >>> 16) & 0xFF;                 // FRAME_NO（3B 大端）
   h[8] = (frameNo >>> 8) & 0xFF;
@@ -314,7 +317,7 @@ function buildHeader(frameNo, data, flags = 0x8000) {
   h[17] = state.geo.COLS;
   h[18] = state.geo.ROWS;
   h[19] = (state.geo.BIT << 4) | state.geo.PAD;   // GEO：高 4 bit BIT，低 4 bit PAD
-  dv.setUint16(20, flags);                        // FLAGS：gzip / FEC
+  dv.setUint16(20, flags | (state.coding === 'fountain' ? 0x2000 : 0));
   // CRC 覆盖偏移 2–21 + 数据区有效字节（冻结关键）
   dv.setUint32(22, crcFinal(crcUpdate(data, crcUpdate(h.subarray(2, 22), 0xFFFFFFFF))));
   return h;
@@ -345,6 +348,45 @@ function fecFramePayload(frameNo) {
 
 function fecFrameCount() {
   return fecParityCount(state.totalFrames);
+}
+
+// 实验 v2：与 receiver/fountain.py 相同的 uint32 掩码生成。
+function fountainMask(fileId, frameNo, count) {
+  let x = (fileId ^ Math.imul(frameNo + 1, 0x9E3779B1) ^ 0xA5A5A5A5) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0;
+  x = Math.imul(x, 0x85EBCA6B) >>> 0;
+  x = (x ^ (x >>> 13)) >>> 0;
+  x = Math.imul(x, 0xC2B2AE35) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0;
+  return ((x & (count === 32 ? 0xFFFFFFFF : (2 ** count - 1))) >>> 0) || 1;
+}
+function fountainFramePayload(frameNo) {
+  const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
+  const group = (frameNo - state.totalFrames) % groups;
+  const start = group * FEC_GROUP_SIZE;
+  const count = Math.min(FEC_GROUP_SIZE, state.totalFrames - start);
+  const mask = fountainMask(state.fileId, frameNo, count);
+  const out = new Uint8Array(state.geo.chunkSize);
+  for (let i = 0; i < count; i++) {
+    if (!(mask & (1 << i))) continue;
+    const data = frameSlice(start + i);
+    for (let j = 0; j < data.length; j++) out[j] ^= data[j];
+  }
+  return out;
+}
+function buildFountainRepairSequence(serial, perGroup = 2) {
+  const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
+  const seq = [];
+  let count = 0;
+  for (let s = serial; s < serial + perGroup; s++) {
+    for (let g = 0; g < groups; g++) {
+      const frameNo = state.totalFrames + s * groups + g;
+      if (frameNo >= 0xFFFFFF) throw new Error('喷泉码修复帧编号已耗尽');
+      if (count++ % 100 === 0) seq.push(-1);
+      seq.push(-frameNo - 2);
+    }
+  }
+  return seq;
 }
 
 /* 帧 → COLS×ROWS 位网格：行优先、字节内 MSB first，黑块 = 1 */
@@ -384,7 +426,7 @@ function buildMetadataFrame() {
   const h = new Uint8Array(26);
   const dv = new DataView(h.buffer);
   h[0] = 0xF0; h[1] = 0xA5;                       // SYNC（不参与 CRC）
-  h[2] = 0x01;                                    // VER
+  h[2] = state.coding === 'fountain' ? 0x02 : 0x01;
   dv.setUint32(3, state.fileId);                  // FILE_ID
   h[7] = 0xFF; h[8] = 0xFF; h[9] = 0xFF;          // FRAME_NO = 0xFFFFFF（元数据哨兵）
   h[10] = (state.totalFrames >>> 16) & 0xFF;      // TOTAL_FRAMES：数据帧数（不含元数据帧）
@@ -395,7 +437,7 @@ function buildMetadataFrame() {
   h[17] = state.geo.COLS;
   h[18] = state.geo.ROWS;
   h[19] = (state.geo.BIT << 4) | state.geo.PAD;   // GEO：高 4 bit BIT，低 4 bit PAD
-  h[20] = 0x80; h[21] = 0x00;                     // FLAGS：bit15 = gzip
+  dv.setUint16(20, state.coding === 'fountain' ? 0xA000 : 0x8000);
   // CRC 覆盖偏移 2–21 + 数据区有效字节（冻结关键）
   dv.setUint32(22, crcFinal(crcUpdate(payload, crcUpdate(h.subarray(2, 22), 0xFFFFFFFF))));
   return { header: h, payload };
@@ -480,8 +522,9 @@ function renderFrame(frameNo) {
   renderGrid(encodeFrameGrid(buildHeader(frameNo, data), data));
 }
 function renderFecFrame(frameNo) {
-  const data = fecFramePayload(frameNo);
-  renderGrid(encodeFrameGrid(buildHeader(frameNo, data, FEC_FLAGS), data));
+  const fountain = state.coding === 'fountain';
+  const data = fountain ? fountainFramePayload(frameNo) : fecFramePayload(frameNo);
+  renderGrid(encodeFrameGrid(buildHeader(frameNo, data, fountain ? 0xB000 : FEC_FLAGS), data));
 }
 function renderMetadataFrame() {
   const m = buildMetadataFrame();
@@ -510,10 +553,13 @@ function updateTitleProgress(ts) {
   lastTitleTs = ts;
   const elapsed = Math.floor((ts - playbackStartTs) / 1000);
   const pct = Math.floor(playPos / playbackSequence.length * 100);
-  document.title = `第 ${roundNo} 轮 · ${pct}% · 已播 ${elapsed}s`;
+  document.title = state.coding === 'fountain' && roundNo > 1
+    ? `喷泉码修复 · 第 ${roundNo - 1} 批 · 已播 ${elapsed}s`
+    : `第 ${roundNo} 轮 · ${pct}% · 已播 ${elapsed}s`;
 }
 
 let rafId = 0, lastTs = 0, playPos = 0, holdUntil = 0, playbackSequence = [];
+let fountainSerial = 2;
 function buildPlaybackSequence(interleaveDepth = state.playMode === 'window' ? 64 : 1) {
   const seq = [];
   const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
@@ -529,8 +575,10 @@ function buildPlaybackSequence(interleaveDepth = state.playMode === 'window' ? 6
           if (dataCount++ % 100 === 0) seq.push(-1);
           seq.push(frameNo);
         } else {
-          seq.push(-(2 + state.totalFrames + group * FEC_PARITY_FRAMES
-                     + slot - FEC_GROUP_SIZE));
+          const relative = state.coding === 'fountain'
+            ? (slot - FEC_GROUP_SIZE) * groups + group
+            : group * FEC_PARITY_FRAMES + slot - FEC_GROUP_SIZE;
+          seq.push(-(2 + state.totalFrames + relative));
         }
       }
     }
@@ -555,9 +603,22 @@ function loop(ts) {
     } else {
       renderFecFrame(-item - 2);
     }
-    if (playPos === playbackSequence.length - 1) holdUntil = ts + FINAL_FRAME_HOLD_MS;
+    if (playPos === playbackSequence.length - 1 && state.coding !== 'fountain') holdUntil = ts + FINAL_FRAME_HOLD_MS;
     playPos = (playPos + 1) % playbackSequence.length;
-    if (playPos === 0) roundNo++;   // 循环回卷即一轮播完（issue #33 标题轮次）
+    if (playPos === 0) {
+      roundNo++;
+      if (state.coding === 'fountain') {
+        const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
+        if (state.totalFrames + (fountainSerial + 2) * groups > 0xFFFFFF) {
+          playbackSequence = buildPlaybackSequence();
+          fountainSerial = 2;
+          roundNo = 1;
+        } else {
+          playbackSequence = buildFountainRepairSequence(fountainSerial);
+          fountainSerial += 2;
+        }
+      }
+    }
   }
   rafId = requestAnimationFrame(loop);
 }
@@ -612,10 +673,12 @@ async function startPlayback() {
   // 可操作口径（见 MIN_RECOMMENDED_ROUNDS / ROUND_GUIDANCE）；前缀当前播放
   // 模式，保持状态栏「标明当前模式」的既有契约
   setStatus((fullscreenDenied ? '全屏请求被拒绝（非用户手势触发），已降级为窗口播放；' : '')
-    + `${PLAY_MODES[state.playMode].label}中：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）`,
+    + (state.coding === 'fountain' ? '喷泉码播放中：等接收端确认还原后停止'
+      : `${PLAY_MODES[state.playMode].label}中：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）`),
     fullscreenDenied);
   requestWakeLock();   // 防熄屏（issue #32）：挂播放生命周期，不支持时静默降级
   playbackSequence = buildPlaybackSequence();
+  fountainSerial = 2;
   playPos = 0; holdUntil = 0; lastTs = -1e9;
   rafId = requestAnimationFrame(loop);
 }
@@ -738,7 +801,8 @@ const SOP_REMINDER_SENDER = (area) =>
   `播放期间勿遮挡${area}、勿熄屏、勿切标签页（见下方关键提醒）`;
 const SOP_RESTORE_RECEIVER = '收齐数据帧 + 元数据帧后自动「还原」落盘';
 const SOP_STOP_SENDER = (stopWay) =>
-  `建议播满 ${MIN_RECOMMENDED_ROUNDS} 轮（${ROUND_GUIDANCE}）后${stopWay}`;
+  state.coding === 'fountain' ? `等接收端确认还原后${stopWay}`
+    : `建议播满 ${MIN_RECOMMENDED_ROUNDS} 轮（${ROUND_GUIDANCE}）后${stopWay}`;
 const SOP_SUMMARY_RECEIVER = '查看还原摘要，核对文件名与大小';
 
 /* 播放模式注册表（issue #21）：显示名 / 配对取帧源 / 停止提示 / desktop
@@ -778,7 +842,11 @@ const PLAY_MODES = {
 /* 两端 SOP 表渲染（issue #36）：随播放模式联动（setPlayMode 调用 + 启动首次渲染） */
 function renderSop() {
   el('sopTable').tBodies[0].innerHTML =
-    PLAY_MODES[state.playMode].sop.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+    PLAY_MODES[state.playMode].sop.map(r => {
+      const sender = state.coding === 'fountain'
+        ? r[0].replace(/建议播满 .*?后/, '等接收端确认还原后') : r[0];
+      return `<tr><td>${sender}</td><td>${r[1]}</td></tr>`;
+    }).join('');
 }
 
 /* 接收端命令生成（Story 6，issue #18/#21/#22）：复制按钮与 frames.json 同源。
@@ -800,7 +868,9 @@ function ensureFrameState() {
   }
 }
 function exportSequence() {
-  return buildPlaybackSequence(1); // PNG 导出保持顺序编号，实时桌面播放才交错。
+  const seq = buildPlaybackSequence(1);
+  return state.coding === 'fountain'
+    ? seq.concat(buildFountainRepairSequence(2, 16)) : seq;
 }
 function pngBytes() {
   return new Promise((resolve) => stage.toBlob(resolve, 'image/png'))
@@ -817,8 +887,12 @@ function buildFramesJson(totalExported) {
     geometry: { COLS: g.COLS, ROWS: g.ROWS, BIT: g.BIT, PAD: g.PAD },
     chunkSize: g.chunkSize,
     totalFrames: state.totalFrames,
-    fec: { groupSize: FEC_GROUP_SIZE, parityFrames: FEC_PARITY_FRAMES,
+    fec: state.coding === 'fountain' ? null : { groupSize: FEC_GROUP_SIZE, parityFrames: FEC_PARITY_FRAMES,
            totalParityFrames: fecFrameCount() },
+    coding: state.coding,
+    protocolVersion: state.coding === 'fountain' ? 2 : 1,
+    fountain: state.coding === 'fountain'
+      ? { groupSize: 32, repairFramesPerGroup: 18 } : null,
     totalExported,
     receiverCommand: buildReceiverCommand('images'),
   }, null, 2);
@@ -944,8 +1018,8 @@ function updateInfo() {
     ['COLS × ROWS', `${g.COLS} × ${g.ROWS}`],
     ['chunkSize', `${g.chunkSize} 字节/帧`],
     ['总帧数', `${state.totalFrames}（每轮约 ${perRoundSec.toFixed(1)} 秒）`],
-    ['预计总时长', `${formatDuration(perRoundSec * MIN_RECOMMENDED_ROUNDS)}（播满 ${MIN_RECOMMENDED_ROUNDS} 轮）`],
-    ['FEC 校验帧', `${fecFrameCount()}（每 32 个数据帧附加 2 个）`],
+    ['预计总时长', state.coding === 'fountain' ? '丢帧条件下持续修复，以接收端还原为准' : `${formatDuration(perRoundSec * MIN_RECOMMENDED_ROUNDS)}（播满 ${MIN_RECOMMENDED_ROUNDS} 轮）`],
+    ['纠错帧', state.coding === 'fountain' ? '首轮每组 2 个，随后持续生成新修复帧' : `${fecFrameCount()}（每 32 个数据帧附加 2 个）`],
   ];
   const tb = el('info').tBodies[0];
   tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
@@ -1030,7 +1104,7 @@ function restoreConfig() {
    deriveGeometry 定格，播放中改参不生效却无提示。参数输入连同预设 /
    模式按钮一并置灰（播放态 UI 整体隐藏，置灰是显式状态兜底，防自动
    化或非常规路径误改），锁定提示随开合显隐；停止播放恢复可编辑。 */
-const PARAM_LOCK_IDS = ['bit', 'pad', 'fps', 'winW', 'winH',
+const PARAM_LOCK_IDS = ['bit', 'pad', 'fps', 'winW', 'winH', 'coding',
                         'modeFullscreen', 'modeWindow', 'presetDesktop', 'presetCamera'];
 function setParamsLocked(locked) {
   for (const id of PARAM_LOCK_IDS) el(id).disabled = locked;
@@ -1091,11 +1165,26 @@ el('reminderRounds').textContent =
 /* 两端 SOP 首次渲染（默认全屏模式；此后由 setPlayMode 随切换联动，issue #36） */
 renderSop();
 
+el('coding').addEventListener('change', () => {
+  if (state.playing) { el('coding').value = state.coding; return; }
+  state.coding = el('coding').value;
+  const fountain = state.coding === 'fountain';
+  el('codingHint').hidden = !fountain;
+  el('roundHint').textContent = fountain
+    ? '停止时机：等接收端确认还原后停止；修复批次不是完整数据轮次。'
+    : `停止时机：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）。`;
+  el('reminderRounds').textContent = fountain ? '喷泉码：等接收端确认还原后停止。'
+    : `播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止：${ROUND_GUIDANCE}。`;
+  renderSop();
+  if (state.geo) updateInfo();
+});
+
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
 window.__sender = {
   state, selfTest, crcUpdate, crcFinal, deriveGeometry, buildPlaybackSequence,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
   renderFrame, renderMetadataFrame, buildExportFrames, buildReceiverCommand,
+  fountainMask, fountainFramePayload, buildFountainRepairSequence,
   hasWakeLock: () => !!wakeLock,   // Wake Lock 生命周期断言（issue #32）
   FINAL_FRAME_HOLD_MS,
 };

@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "generated_at": "2026-10-03T06:14:31.908734+00:00",
+    "mode": "live-desktop",
+    "playback_order": "interleaved",
+    "interleave_depth": 64,
+    "capture": "mss",
+    "coding": "fountain",
+    "input": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\fountain-experiment\\input.bin",
+    "input_bytes": 1048576,
+    "input_sha256": "c8abcba1b04979880c779dab9f322f06ff7dde966357d73f5161a50919a1912f",
+    "fps_list": [
+      30
+    ],
+    "size_mib": 1.0,
+    "reps": 1,
+    "calib_cycles": 1,
+    "bit_css": 6,
+    "pad": 3,
+    "window": [
+      1536,
+      816
+    ],
+    "window_pos": [
+      0,
+      0
+    ],
+    "region_pad_dip": 80,
+    "python": "3.13.1",
+    "note": "wall_s = 文件载入(播放开始)→还原写盘完成（实投吞吐口径，含最多一整轮等待）；elapsed_s = run_receive elapsed（首数据帧落地起）；缺帧/实测到达 FPS 为 calibrate 口径（issue #29）"
+  },
+  "calibrations": [],
+  "runs": [
+    {
+      "fps": 30,
+      "geo": {
+        "fps": 30,
+        "bit": 8,
+        "cols": 216,
+        "rows": 91,
+        "chunk": 2431,
+        "total": 432
+      },
+      "cycle_s": 16.5,
+      "dpr": 1.25,
+      "region": {
+        "left": 0,
+        "top": 80,
+        "width": 1920,
+        "height": 976
+      },
+      "reps": [
+        {
+          "rep": 0,
+          "fps": 30,
+          "size_mib": 1.0,
+          "failed": false,
+          "wall_s": 23.844,
+          "elapsed_s": 23.689,
+          "received": 432,
+          "total": 432,
+          "rejected": 0,
+          "queue_produced": 518,
+          "queue_dropped": 0,
+          "sha_ok": true,
+          "error": null,
+          "trace": "D:\\AI\\xxx-file-trans\\benchmark\\results\\work\\fountain-mss-v2-final-20261003\\traces\\receive_mss_30_0_20261003T061407.jsonl"
+        }
+      ]
+    }
+  ]
+}
