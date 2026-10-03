@@ -21,6 +21,7 @@ from pathlib import Path
 from receiver import paths
 from receiver.pipeline import DecodedFrame, FrameRejected, GeometryCache, decode_frame
 from receiver.progress import ProgressReporter
+from receiver.protocol import FLAGS_REPAIR
 from receiver.restore import RestoreError, gunzip_verify
 from receiver.sanitize import safe_dest, sanitize_filename
 from receiver.store import FrameStore, IncompleteError
@@ -249,6 +250,7 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                         stopped = True
                         break
                     stage_started = time.perf_counter()
+                    received_before = store.received_count()
                     try:
                         frame: DecodedFrame = decode_frame(img, geo_cache)
                     except FrameRejected as e:
@@ -278,9 +280,11 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                         reporter.on_rejected(name, e)
                         continue
                     store_ms = round((time.perf_counter() - stage_started) * 1000, 3)
-                    if is_new:
+                    new_data_count = store.received_count() - received_before
+                    recovered_count = new_data_count - int(is_new)
+                    if is_new or frame.header.flags & FLAGS_REPAIR:
                         timer.start()  # 与参数锁定同点起算，首帧前时间不计入
-                    reporter.on_decoded(frame.payload, is_new)
+                    reporter.on_decoded(frame.payload, new_data_count > 0)
                     if store.total_frames is not None:
                         reporter.set_total(store.total_frames,
                                            completed=store.received_count())
@@ -291,13 +295,16 @@ def run_receive(frames, out_dir: Path, reporter_factory=ProgressReporter,
                                       "100%" if received == total else
                                       f"{int(percent)}%")
                     frame_kind = ("metadata" if frame.header.frame_no == 0xFFFFFF else
+                                  "fountain" if frame.header.flags & FLAGS_REPAIR else
                                   "fec" if frame.header.frame_no >= frame.header.total_frames else
                                   "data")
                     emit("frame", frame_no=frame.header.frame_no,
                          frame_kind=frame_kind, is_new=is_new,
+                         recovered_count=recovered_count,
+                         new_data_count=new_data_count,
                          received=received, total=total, percent=percent,
                          gap_ms=gap_ms, decode_ms=decode_ms, store_ms=store_ms)
-                    if (is_new and progress_label in {"90%", "95%", "99%", "100%"}
+                    if (new_data_count > 0 and progress_label in {"90%", "95%", "99%", "100%"}
                             and progress_label != last_progress_label):
                         emit("progress_milestone", label=progress_label,
                              received=received, total=total,
