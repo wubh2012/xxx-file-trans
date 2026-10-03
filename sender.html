@@ -136,6 +136,7 @@
       </p>
       <p><label>纠错模式 <select id="coding"><option value="fec">固定 FEC（默认）</option><option value="fountain">喷泉码（实验 v2）</option></select></label></p>
       <p id="codingHint" class="hint" hidden>首轮发送原始数据，随后持续发送新修复帧；请等接收端确认还原后停止。需使用本分支接收端。</p>
+      <p id="repairRatioRow" hidden><label>原始帧 : 修复帧 <select id="repairRatio"><option value="32:1">32:1</option><option value="32:2" selected>32:2</option><option value="16:1">16:1</option><option value="8:1">8:1</option></select></label></p>
       <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
     </fieldset>
     <fieldset>
@@ -239,6 +240,7 @@ const state = {
   geo: null,          // { BIT, PAD, COLS, ROWS, FPS, chunkSize }
   totalFrames: 0,
   coding: 'fec',
+  repairRatio: '32:2',
   playing: false,
   mode: 'desktop',       // 当前发送模式：desktop=屏幕播放 / images=导出 PNG（决定复制按钮的接收端命令）
   playMode: 'fullscreen', // 播放模式（issue #21）：fullscreen=全屏（camera 拍摄）/ window=窗口（desktop 抓屏）
@@ -560,29 +562,43 @@ function updateTitleProgress(ts) {
 
 let rafId = 0, lastTs = 0, playPos = 0, holdUntil = 0, playbackSequence = [];
 let fountainSerial = 2;
+function fountainSourceRepairCount() {
+  const [stride, burst] = state.repairRatio.split(':').map(Number);
+  return Math.ceil(state.totalFrames / stride) * burst;
+}
+function fountainNextSerial() {
+  return Math.ceil(fountainSourceRepairCount() / Math.ceil(state.totalFrames / FEC_GROUP_SIZE));
+}
 function buildPlaybackSequence(interleaveDepth = state.playMode === 'window' ? 64 : 1) {
   const seq = [];
   const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
+  const fountain = state.coding === 'fountain';
+  const [stride, burst] = state.repairRatio.split(':').map(Number);
+  let repairCount = 0;
+  const appendRepairs = () => {
+    for (let i = 0; i < burst; i++) seq.push(-(2 + state.totalFrames + repairCount++));
+  };
   let dataCount = 0;
   for (let base = 0; base < groups; base += interleaveDepth) {
     const end = Math.min(groups, base + interleaveDepth);
     // 交错不同纠错组的同一位置；连续丢帧分散到不同组，不改变帧格式。
-    for (let slot = 0; slot < FEC_GROUP_SIZE + FEC_PARITY_FRAMES; slot++) {
+    for (let slot = 0; slot < FEC_GROUP_SIZE + (fountain ? 0 : FEC_PARITY_FRAMES); slot++) {
       for (let group = base; group < end; group++) {
         if (slot < FEC_GROUP_SIZE) {
           const frameNo = group * FEC_GROUP_SIZE + slot;
           if (frameNo >= state.totalFrames) continue;
           if (dataCount++ % 100 === 0) seq.push(-1);
           seq.push(frameNo);
+          // 保留原始帧交错顺序，每 stride 帧穿插修复；修复编号轮流覆盖各组。
+          if (fountain && dataCount % stride === 0) appendRepairs();
         } else {
-          const relative = state.coding === 'fountain'
-            ? (slot - FEC_GROUP_SIZE) * groups + group
-            : group * FEC_PARITY_FRAMES + slot - FEC_GROUP_SIZE;
+          const relative = group * FEC_PARITY_FRAMES + slot - FEC_GROUP_SIZE;
           seq.push(-(2 + state.totalFrames + relative));
         }
       }
     }
   }
+  if (fountain && dataCount % stride) appendRepairs();
   return seq;
 }
 function loop(ts) {
@@ -611,7 +627,7 @@ function loop(ts) {
         const groups = Math.ceil(state.totalFrames / FEC_GROUP_SIZE);
         if (state.totalFrames + (fountainSerial + 2) * groups > 0xFFFFFF) {
           playbackSequence = buildPlaybackSequence();
-          fountainSerial = 2;
+          fountainSerial = fountainNextSerial();
           roundNo = 1;
         } else {
           playbackSequence = buildFountainRepairSequence(fountainSerial);
@@ -648,8 +664,8 @@ async function startPlayback() {
     return;
   }
   state.totalFrames = Math.ceil(state.compSize / state.geo.chunkSize);
-  if (state.totalFrames + fecFrameCount() > 0xFFFFFF) {
-    setStatus('文件过大：数据帧 + FEC 帧号超出 3 字节上限', true); return;
+  if (state.totalFrames + (state.coding === 'fountain' ? fountainSourceRepairCount() : fecFrameCount()) > 0xFFFFFF) {
+    setStatus('文件过大：数据帧 + 纠错帧号超出 3 字节上限', true); return;
   }
   // 元数据帧 12+nameLen 超出 CHUNK_SIZE 时接收端必整帧丢弃（§4），发送端在此拦截，
   // 避免每轮元数据永远缺失、文件无法还原且无提示
@@ -678,7 +694,7 @@ async function startPlayback() {
     fullscreenDenied);
   requestWakeLock();   // 防熄屏（issue #32）：挂播放生命周期，不支持时静默降级
   playbackSequence = buildPlaybackSequence();
-  fountainSerial = 2;
+  fountainSerial = fountainNextSerial();
   playPos = 0; holdUntil = 0; lastTs = -1e9;
   rafId = requestAnimationFrame(loop);
 }
@@ -870,7 +886,7 @@ function ensureFrameState() {
 function exportSequence() {
   const seq = buildPlaybackSequence(1);
   return state.coding === 'fountain'
-    ? seq.concat(buildFountainRepairSequence(2, 16)) : seq;
+    ? seq.concat(buildFountainRepairSequence(fountainNextSerial(), 16)) : seq;
 }
 function pngBytes() {
   return new Promise((resolve) => stage.toBlob(resolve, 'image/png'))
@@ -892,7 +908,8 @@ function buildFramesJson(totalExported) {
     coding: state.coding,
     protocolVersion: state.coding === 'fountain' ? 2 : 1,
     fountain: state.coding === 'fountain'
-      ? { groupSize: 32, repairFramesPerGroup: 18 } : null,
+      ? { groupSize: 32, sourceRepairRatio: state.repairRatio,
+          firstRoundRepairFrames: fountainSourceRepairCount(), extraRepairRounds: 16 } : null,
     totalExported,
     receiverCommand: buildReceiverCommand('images'),
   }, null, 2);
@@ -1019,7 +1036,7 @@ function updateInfo() {
     ['chunkSize', `${g.chunkSize} 字节/帧`],
     ['总帧数', `${state.totalFrames}（每轮约 ${perRoundSec.toFixed(1)} 秒）`],
     ['预计总时长', state.coding === 'fountain' ? '丢帧条件下持续修复，以接收端还原为准' : `${formatDuration(perRoundSec * MIN_RECOMMENDED_ROUNDS)}（播满 ${MIN_RECOMMENDED_ROUNDS} 轮）`],
-    ['纠错帧', state.coding === 'fountain' ? '首轮每组 2 个，随后持续生成新修复帧' : `${fecFrameCount()}（每 32 个数据帧附加 2 个）`],
+    ['纠错帧', state.coding === 'fountain' ? `首轮按 ${state.repairRatio} 穿插修复帧，随后持续生成新修复帧` : `${fecFrameCount()}（每 32 个数据帧附加 2 个）`],
   ];
   const tb = el('info').tBodies[0];
   tb.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
@@ -1104,7 +1121,7 @@ function restoreConfig() {
    deriveGeometry 定格，播放中改参不生效却无提示。参数输入连同预设 /
    模式按钮一并置灰（播放态 UI 整体隐藏，置灰是显式状态兜底，防自动
    化或非常规路径误改），锁定提示随开合显隐；停止播放恢复可编辑。 */
-const PARAM_LOCK_IDS = ['bit', 'pad', 'fps', 'winW', 'winH', 'coding',
+const PARAM_LOCK_IDS = ['bit', 'pad', 'fps', 'winW', 'winH', 'coding', 'repairRatio',
                         'modeFullscreen', 'modeWindow', 'presetDesktop', 'presetCamera'];
 function setParamsLocked(locked) {
   for (const id of PARAM_LOCK_IDS) el(id).disabled = locked;
@@ -1170,6 +1187,7 @@ el('coding').addEventListener('change', () => {
   state.coding = el('coding').value;
   const fountain = state.coding === 'fountain';
   el('codingHint').hidden = !fountain;
+  el('repairRatioRow').hidden = !fountain;
   el('roundHint').textContent = fountain
     ? '停止时机：等接收端确认还原后停止；修复批次不是完整数据轮次。'
     : `停止时机：建议至少播满 ${MIN_RECOMMENDED_ROUNDS} 轮再停止（${ROUND_GUIDANCE}）。`;
@@ -1178,13 +1196,18 @@ el('coding').addEventListener('change', () => {
   renderSop();
   if (state.geo) updateInfo();
 });
+el('repairRatio').addEventListener('change', () => {
+  if (state.playing) { el('repairRatio').value = state.repairRatio; return; }
+  state.repairRatio = el('repairRatio').value;
+  if (state.geo) updateInfo();
+});
 
 /* 仅供自动化验证 / 闭环自测使用（file:// 本地，无网络暴露面） */
 window.__sender = {
   state, selfTest, crcUpdate, crcFinal, deriveGeometry, buildPlaybackSequence,
   encodeFrameGrid, buildMetadataPayload, buildMetadataFrame,
   renderFrame, renderMetadataFrame, buildExportFrames, buildReceiverCommand,
-  fountainMask, fountainFramePayload, buildFountainRepairSequence,
+  fountainMask, fountainFramePayload, buildFountainRepairSequence, fountainNextSerial,
   hasWakeLock: () => !!wakeLock,   // Wake Lock 生命周期断言（issue #32）
   FINAL_FRAME_HOLD_MS,
 };

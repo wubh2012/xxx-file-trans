@@ -367,8 +367,11 @@ def load_and_play(page, path: Path, fps: int,
         print(f"  [warn] 载入未进入播放态（status={status!r}），整页重载重试",
               flush=True)
     coding = page.locator("#coding").input_value()
+    repair_ratio = page.locator("#repairRatio").input_value()
     page.reload()
     page.select_option("#coding", coding)
+    if coding == "fountain":
+        page.select_option("#repairRatio", repair_ratio)
     page.wait_for_selector("#modeWindow", timeout=10000)
     page.click("#modeWindow")
     page.fill("#bit", str(bit_css))
@@ -388,6 +391,8 @@ def main() -> int:
                     help="desktop 采集后端（B2 复测用 dxgi；默认 mss 与 v2 报告同口径）")
     ap.add_argument("--coding", choices=["fec", "fountain"], default="fec",
                     help="对比固定 FEC 与实验喷泉码；喷泉码请搭配 --skip-calibration")
+    ap.add_argument("--repair-ratio", choices=["32:1", "32:2", "16:1", "8:1"],
+                    default="32:2", help="喷泉码首轮原始帧与修复帧穿插比例")
     ap.add_argument("--input", type=Path,
                     help="真实文件路径；指定后所有档位/rep 使用同一文件并校验 SHA-256")
     ap.add_argument("--bit-css", type=int, default=BIT_CSS,
@@ -502,6 +507,8 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         page = ctx.new_page()
         page.goto(sender_uri)
         page.select_option("#coding", args.coding)
+        if args.coding == "fountain":
+            page.select_option("#repairRatio", args.repair_ratio)
         page.click("#modeWindow")
         page.fill("#bit", str(args.bit_css))
         page.fill("#pad", str(args.pad))
@@ -533,7 +540,8 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                 raise RuntimeError(f"物理 BIT {geo['bit']} 超出帧头 4 bit 上限，"
                                    "请降低显示缩放或 BIT")
             region, dpr = compute_region(page)
-            cycle_s = playback_cycle_seconds(geo["total"], fps)
+            sequence_length = page.evaluate("() => __sender.buildPlaybackSequence().length")
+            cycle_s = sequence_length / fps + (FINAL_FRAME_HOLD_S if args.coding == "fec" else 0)
             print(f"  物理几何 BIT={geo['bit']} {geo['cols']}x{geo['rows']}，"
                   f"数据帧 {geo['total']}，理论循环 {cycle_s:.1f}s，dpr={dpr}",
                   flush=True)
@@ -586,6 +594,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
                                   f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.jsonl")
                     trace_metadata = {
                         "coding": args.coding,
+                        "repair_ratio": args.repair_ratio if args.coding == "fountain" else None,
                         "mode": "window-playback-desktop",
                         "capture": capture,
                         "fps": fps,
@@ -672,6 +681,7 @@ def _run_bench(args, capture, results_json, results_csv, sender_uri,
         "playback_order": "interleaved", "interleave_depth": 64,
         "capture": capture,
         "coding": args.coding,
+        "repair_ratio": args.repair_ratio if args.coding == "fountain" else None,
         "input": str(args.input) if args.input is not None else None,
         "input_bytes": len(fixed_raw) if fixed_raw is not None else None,
         "input_sha256": fixed_sha,

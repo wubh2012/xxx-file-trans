@@ -2,6 +2,7 @@
 
 import base64
 import gzip
+import json
 import random
 import zlib
 from dataclasses import replace
@@ -133,7 +134,8 @@ def test_coefficient_golden_vector():
         1, 0x170B8, 0xDADD70B8]
 
 
-def test_browser_png_roundtrip_with_missing_data_and_crc(tmp_path):
+@pytest.mark.parametrize("ratio", ["32:1", "32:2", "16:1", "8:1"])
+def test_browser_png_roundtrip_with_missing_data_and_crc(tmp_path, ratio):
     from playwright.sync_api import sync_playwright
     plain = random.Random(7).randbytes(3500)
     source = tmp_path / "browser.bin"
@@ -145,12 +147,15 @@ def test_browser_png_roundtrip_with_missing_data_and_crc(tmp_path):
         page.goto((Path(__file__).resolve().parents[1] / "sender.html").as_uri())
         page.click("#modeWindow")
         page.select_option("#coding", "fountain")
+        page.select_option("#repairRatio", ratio)
         page.fill("#bit", "10")
         page.set_input_files("#file", str(source))
         page.wait_for_selector("body.playing")
         assert page.locator("#coding").is_disabled()
+        assert page.locator("#repairRatio").is_disabled()
         page.keyboard.press("Escape")
         assert page.locator("#coding").is_enabled()
+        assert page.locator("#repairRatio").is_enabled()
         assert "接收端确认" in page.locator("#sopTable").inner_text()
         masks = page.evaluate("() => [1,17,32].map(count => "
             "[count, __sender.fountainMask(0xFFFFFFFF, 0xFFFFFE, count)])")
@@ -172,9 +177,47 @@ def test_browser_png_roundtrip_with_missing_data_and_crc(tmp_path):
             repairs += 1
         if decoded.header.frame_no not in lost:
             store.add(decoded)
-    assert repairs >= 18
+    manifest = next(json.loads(f["text"]) for f in files if f["text"])
+    assert manifest["fountain"]["sourceRepairRatio"] == ratio
+    assert repairs == manifest["fountain"]["firstRoundRepairFrames"] + 16 * ((manifest["totalFrames"] + 31) // 32)
     assert store.is_complete()
     assert gzip.decompress(store.assemble()) == plain
+
+
+def test_interspersed_repairs_and_continuation_match_simulation():
+    from benchmark.run_bench_fountain import source_sequence
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto((Path(__file__).resolve().parents[1] / "sender.html").as_uri())
+        for total in (1, 31, 32, 33, 432, 2048, 4466):
+            for ratio in ("32:1", "32:2", "16:1", "8:1"):
+                for depth in (1, 64):
+                    seq, following = page.evaluate("""([total, ratio, depth]) => {
+                        __sender.state.totalFrames = total;
+                        __sender.state.coding = 'fountain';
+                        __sender.state.repairRatio = ratio;
+                        return [__sender.buildPlaybackSequence(depth),
+                            __sender.buildFountainRepairSequence(__sender.fountainNextSerial())];
+                    }""", [total, ratio, depth])
+                    assert seq == source_sequence(total, "fountain", ratio, depth)
+                    assert sorted(n for n in seq if n >= 0) == list(range(total))
+                    repair_ids = [-n - 2 for n in seq if n < -1]
+                    stride, burst = map(int, ratio.split(":"))
+                    assert repair_ids == list(range(total, total + ((total + stride - 1) // stride) * burst))
+                    assert min(-n - 2 for n in following if n < -1) > max(repair_ids)
+                    pending_data = 0
+                    for n in seq:
+                        if n >= 0:
+                            pending_data += 1
+                            assert pending_data <= stride
+                        elif n < -1:
+                            pending_data = 0
+                    if total > stride:
+                        assert seq.index(next(n for n in seq if n < -1)) < max(
+                            i for i, n in enumerate(seq) if n >= 0)
+        browser.close()
 
 
 def test_repair_crc_corruption_rejected(tmp_path):
