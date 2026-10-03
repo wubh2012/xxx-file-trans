@@ -135,7 +135,7 @@
         <span id="fpsWarn" class="hint" hidden>⚠ FPS &gt; 30：建议先用接收端 calibrate 实测目标机器误帧率（缺帧率 0）再正式传输，否则丢一帧即等整个循环重播</span>
       </p>
       <p><label>纠错模式 <select id="coding"><option value="fec">固定 FEC（默认）</option><option value="fountain">喷泉码（实验 v2）</option></select></label></p>
-      <p id="codingHint" class="hint" hidden>首轮发送原始数据，随后持续发送新修复帧；请等接收端确认还原后停止。需使用本分支接收端。</p>
+      <p id="codingHint" class="hint" hidden>首轮穿插修复帧，随后持续发送新修复帧；请等接收端确认还原后停止。需配套使用支持喷泉码 v2 的新版接收端。</p>
       <p id="repairRatioRow" hidden><label>原始帧 : 修复帧 <select id="repairRatio"><option value="32:1">32:1</option><option value="32:2" selected>32:2</option><option value="16:1">16:1</option><option value="8:1">8:1</option></select></label></p>
       <p id="paramLockHint" class="hint" hidden>播放中：以上参数已锁定，几何在开始播放时定格，修改留待停止后重新播放时生效</p>
     </fieldset>
