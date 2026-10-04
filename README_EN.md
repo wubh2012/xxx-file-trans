@@ -4,7 +4,7 @@
 
 # xxx-file-trans
 
-**Turn files into visual frames and transfer them one way through screens, videos, or PNG sequences.**
+Encode files as black-and-white block images, then recover them from a screen, video, or PNG sequence.
 
 [![Windows](https://img.shields.io/badge/Windows-11-0078D4)](#getting-started)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)](#run-from-source)
@@ -14,35 +14,31 @@
 
 </div>
 
-The sender compresses a file, splits it into chunks, and encodes them as black-and-white block frames. The receiver reads those frames and reconstructs the original file. Neither a direct network connection nor per-frame acknowledgments are required. Play the frames in a browser, or create an MP4 or PNG sequence for manual handoff.
+This tool transfers files through images. The sender compresses a file and draws its chunks as black-and-white blocks. The receiver reads the images and rebuilds the original file. The two sides do not need a network connection, and the receiver sends no acknowledgments.
+
+You can play the images in a browser for desktop capture, or save them as an MP4 or PNG sequence and hand those files to the recipient.
 
 ## What it is for
 
-Use it when ordinary file-transfer channels are unavailable but you can still display or exchange visual content: logs, configuration files, reports, and small document bundles.
+If you cannot copy a file directly but the recipient can see your playback or obtain a video, this gives you a way to send it. Typical files include logs, configuration files, reports, and small document bundles.
 
-| Your task | Recommended path |
-| --- | --- |
-| The receiver can see the sender's playback on its desktop | Browser window playback → desktop capture → file reconstruction |
-| The two sides need an asynchronous handoff | Create an MP4 → manually hand off the video → offline reconstruction |
-| Verify encoding and decoding, or exchange static frames | Export PNG frames → read the directory → file reconstruction |
-
-These instructions target **Windows 11**. The `camera` source is currently an interface stub; full camera capture is not implemented. Remote-desktop scaling and video-platform recompression need validation in your actual environment.
+The steps below use Windows 11. The `camera` source is a stub and cannot receive live camera footage yet. Try a small file first when using remote desktops or video platforms, since scaling and recompression can affect decoding.
 
 ## Demos
 
 - [Bilibili test video 1 (BV1Euan6zEL8)](https://www.bilibili.com/video/BV1Euan6zEL8/)
 - [Bilibili test video 2 (BV1ata16YEWg)](https://www.bilibili.com/video/BV1ata16YEWg/)
 
-Use these to test recognition and reconstruction from platform playback. Select the highest quality and keep the complete data frame visible. Scaling, recompression, and capture conditions can affect the result.
+You can try the receiver with either video. Select the highest playback quality and keep the whole frame visible. Recompression, player scaling, and capture conditions can affect the result.
 
 ## Features
 
-- **Browser sender** — single-file `sender.html`, no dependencies or build step; window playback, fullscreen playback, and PNG export.
-- **Multiple receiver inputs** — GUI and CLI support desktop capture, video files, and PNG sequences.
-- **MP4 creation** — a separate GUI and CLI encode files directly into video without recording the screen first. Requires FFmpeg.
-- **Missing-frame recovery and resume** — CRC32 checks, forward error correction, repeated playback, and persisted progress handle corruption, missing frames, and interruptions.
-- **Experimental fountain mode (since v1.1.0)** — interspersed XOR repair frames in the first pass, followed by continuously generated repair frames. The browser offers 32:1, 32:2, 16:1, and 8:1 ratios; the receiver detects the mode automatically. Fixed FEC remains the default.
-- **Integrity checks** — gzip integrity checks during reconstruction, followed by a summary with filename, size, elapsed time, and SHA-256 digest.
+- Open `sender.html` directly in a browser. It supports window playback, fullscreen playback, and PNG export without installing dependencies or building anything.
+- The receiver has a GUI and CLI. It can capture desktop playback or read video files and PNG sequences.
+- Create an MP4 directly from a file with the video maker's GUI or CLI. You need FFmpeg, but you do not need to record the screen first.
+- CRC32 checks reject corrupt frames. Forward error correction and replay fill missing chunks, and saved progress lets you resume after an interruption.
+- Version 1.1.0 adds experimental fountain coding. The first pass includes XOR repair frames, then the sender keeps generating new ones. Choose a 32:1, 32:2, 16:1, or 8:1 ratio; the receiver detects it automatically. Fixed FEC is still the default.
+- Reconstruction checks gzip integrity and ends with a summary of the filename, size, elapsed time, and SHA-256 digest.
 
 Fountain mode reduces waiting for the last missing chunks by supplying new repair information without receiver feedback. It uses random linear combinations over GF(2), with up to 32 chunks per group; it is not LT/RaptorQ. Local comparisons showed a 36.1% reduction in median time with MSS capture and a 5.9% increase with stable DXGI capture. See the [fountain experiment guide](docs/fountain-experiment.md) for compatibility and full results.
 
@@ -63,7 +59,7 @@ Place the EXEs in a writable directory and double-click to run. **MP4 creation s
 
 ### Complete your first transfer (GUI)
 
-Start with a small file on one machine to verify the complete loop. The steps include the Chinese control labels for reference.
+For your first try, send a small file on the same computer. The controls below are listed with their Chinese labels.
 
 1. Open `sender.html` in a modern browser. Click the desktop preset («预设：desktop 抓屏») for window playback, BIT 6, and 20 FPS.
 2. Select or drop a small file, then click Start playback («开始播放»). Keep the entire frame visible.
@@ -75,7 +71,7 @@ Start with a small file on one machine to verify the complete loop. The steps in
 
 ### Run from source
 
-Requires Python ≥ 3.11 and a modern browser. Video creation also requires FFmpeg on PATH. Use Windows PowerShell; after cloning, run commands from the repository root:
+Install Python ≥ 3.11 and use a modern browser. You also need FFmpeg on PATH to create videos. Run these commands in Windows PowerShell:
 
 ```powershell
 git clone https://github.com/wubh2012/xxx-file-trans.git
@@ -84,7 +80,7 @@ py -3.11 -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
 
-For another Python version ≥ 3.11, replace `py -3.11` with the corresponding launcher command. Open [sender.html](sender.html), choose the desktop preset, load a small file, and start playback. Then run:
+If you use another Python version ≥ 3.11, change `py -3.11` accordingly. Open [sender.html](sender.html) and start playback using the GUI steps above. Then start the receiver:
 
 ```powershell
 # Receive after interactive region selection
@@ -94,9 +90,9 @@ For another Python version ≥ 3.11, replace `py -3.11` with the corresponding l
 .venv/Scripts/pythonw.exe receiver_gui.pyw
 ```
 
-On Windows, default `--capture auto` prefers DXGI and falls back to MSS when unavailable. The CLI reports the actual backend. Verify stability with the preset before trying 30 FPS.
+On Windows, `--capture auto` tries DXGI first and falls back to MSS. The CLI prints which backend it is using. Keep the preset frame rate until reception works reliably, then try 30 FPS.
 
-On completion, the receiver displays filename, size, elapsed time, frame counts, and SHA-256 digest. Source runs save files in the repository's `output/` by default. If both files are accessible, compare their full hashes:
+The receiver prints the filename, size, elapsed time, frame counts, and SHA-256 digest when it finishes. Running from source saves files in the repository's `output/` by default. If you have access to both files, compare their hashes:
 
 ```powershell
 Get-FileHash -Algorithm SHA256 -LiteralPath sample.txt
@@ -116,8 +112,6 @@ File → compress, split, encode → black-and-white frames
                                   locate, decode, check, recover → original file
 ```
 
-For example, load a log in the browser and select its playback region in the receiver. Once all chunks arrive, the receiver writes the log and displays a completion summary.
-
 ### Create an MP4 and reconstruct offline
 
 This example assumes you have `sample.zip` and `ffmpeg` on PATH:
@@ -136,7 +130,7 @@ This example assumes you have `sample.zip` and `ffmpeg` on PATH:
 .venv/Scripts/pythonw.exe tapemaker_gui.pyw
 ```
 
-Generated MP4s and ordinary screen recordings are parsed frame by frame by default. `--tape` is unnecessary and remains for compatibility with older commands. Uploads and downloads are manual. Validate platform changes to resolution, bitrate, or visual content using representative samples. See the [video-maker guide](docs/tapemaker.md) for repeated rounds and recompression calibration.
+The receiver reads both generated MP4s and screen recordings frame by frame. You do not need `--tape`; it remains for older commands. Upload and download videos manually. If a platform changes the resolution or bitrate, test whether its version still decodes. The [video-maker guide](docs/tapemaker.md) covers repeated rounds and recompression calibration.
 
 ### Receive PNG sequences or screen recordings
 
@@ -157,7 +151,7 @@ Default fixed FEC adds 2 parity frames per group of up to 32 data frames. Up to 
 
 ## File sizes and measured performance
 
-Begin with a **representative 1–4 MB file**. Local tests suggest 1–5 MB is practical for routine transfers. Allow about 3 minutes for 10 MB of poorly compressible content; compressible text can be faster.
+Try a file of 1 to 4 MB first. In local tests, files of 1 to 5 MB worked well for routine transfers. A 10 MB file that compresses poorly took about 3 minutes. Text that compresses well can take less time.
 
 | Sample | Original size | End-to-end time |
 | --- | ---: | ---: |
@@ -170,7 +164,7 @@ Begin with a **representative 1–4 MB file**. Local tests suggest 1–5 MB is p
 
 Tests ran on 2026-10-01 with DXGI capture, 30 FPS, and a clear, unobscured browser window. Each data frame carried 2,431 bytes; each sample had one formal run. Timing included loading, compression, playback, reception, reconstruction, and disk writes. All six passed SHA-256 and byte-for-byte comparisons without replay to fill gaps. 1 MB = 1,000,000 bytes.
 
-Binary samples were pseudorandom; logs and CSV data were synthetic. These are neither speed guarantees nor file-size limits. Larger files, cameras, remote desktops, and video recompression were not covered. See the [file-size report](benchmark/results/report-size-matrix-20261001.md) and [three runs with a 3.57 MB JPG](benchmark/results/report-panda-optimized-20261001.md).
+The binary samples were pseudorandom, and the logs and CSV data were synthetic. These runs only measure the listed samples; speed and usable file size depend on your setup. The tests did not cover larger files, cameras, remote desktops, or video recompression. See the [file-size report](benchmark/results/report-size-matrix-20261001.md) and [three runs with a 3.57 MB JPG](benchmark/results/report-panda-optimized-20261001.md).
 
 ## Local data and limitations
 
@@ -204,7 +198,7 @@ Confirm the video exists and is readable. Test the original and handed-off versi
 .venv/Scripts/python.exe -m tapemaker calibrate "sample.zip" -o calibration
 ```
 
-Simulation does not replace actual platform validation. See the [video-maker guide](docs/tapemaker.md).
+You still need to check that a video decodes after uploading it to the platform. See the [video-maker guide](docs/tapemaker.md).
 
 ### Why does resuming report mismatched parameters?
 
@@ -212,7 +206,7 @@ Restore the original sender settings. To restart with different parameters, back
 
 ### Why can the packaged video maker not find FFmpeg?
 
-Install FFmpeg, add the directory containing `ffmpeg.exe` to PATH, and reopen the video maker. The EXE removes Python setup; MP4 encoding still needs FFmpeg.
+Install FFmpeg, add the directory containing `ffmpeg.exe` to PATH, and reopen the video maker. The EXE includes Python but needs an external FFmpeg installation.
 
 ## Tech stack and project layout
 
@@ -250,7 +244,7 @@ Detailed documents are currently primarily in Chinese:
 - [Requirements](需求文档.md): requirements and scenarios.
 - [Domain glossary](CONTEXT.md) and [architecture decisions](docs/adr/): concepts, naming, and rationale.
 
-Report problems through [Issues](https://github.com/wubh2012/xxx-file-trans/issues). Include your OS, Python version for source runs, sender settings, input source, actual capture backend, errors, and reproduction steps. For video issues, state whether the video was recompressed.
+Open an issue through [Issues](https://github.com/wubh2012/xxx-file-trans/issues). Include your OS, Python version for source runs, sender settings, input source, actual capture backend, errors, and reproduction steps. For video issues, state whether the video was recompressed.
 
 Read the protocol and glossary before making changes. Protocol changes require updates to requirements, the protocol document, and both implementations. Keep both READMEs in sync for user-facing changes.
 
